@@ -400,8 +400,17 @@ and the container recreated, then inspect the app's Detached Command in Sunshine
 To see startup errors directly, use the foreground native-launch command above.
 Changing `.env` followed by `docker compose restart` does not rebuild the image.
 
-If you later rebuild with `ENABLE_BOLT=false`, remove the app in the Sunshine Web
-UI; the persistent home remains intact.
+With `ENABLE_BOLT=false` (the default), the build skips Bolt/CEF downloads and
+compilation, extra runtime dependencies, and the Bolt home helper, cover, and
+Sunshine app template. Startup removes any previously registered **Old School
+RuneScape** entry from the persistent Sunshine app list. Saved Bolt/RuneLite data
+remains intact; enabling Bolt again restores the app entry.
+
+After changing the flag in `.env`, rebuild and recreate the container:
+
+```bash
+docker compose up -d --build --force-recreate sunshine-steam
+```
 
 ---
 

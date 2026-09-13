@@ -8,6 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 merge_app = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["merge_app"]
 deduplicate_desktops = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["deduplicate_desktops"]
+sync_apps = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["sync_apps"]
 
 
 class RegisterBoltAppTests(unittest.TestCase):
@@ -79,6 +80,26 @@ class RegisterBoltAppTests(unittest.TestCase):
             self.assertTrue(merge_app(config, self.app))
             self.assertEqual(existing["image-path"], self.app["image-path"])
             self.assertFalse(merge_app(config, self.app))
+
+    def test_enable_disable_reenable_with_persistent_config(self):
+        config = json.loads((ROOT / "sunshine-config/apps.json").read_text())
+        original = copy.deepcopy(config)
+        self.assertFalse(sync_apps(config))
+        self.assertTrue(sync_apps(config, self.app))
+        self.assertFalse(sync_apps(config, self.app))
+        self.assertTrue(sync_apps(config))
+        self.assertEqual(config, original)
+        self.assertFalse(sync_apps(config))
+        self.assertTrue(sync_apps(config, self.app))
+        self.assertEqual(config["apps"][-1], self.app)
+
+    def test_disabled_removes_all_osrs_entries_only(self):
+        config = {"apps": [self.app.copy(), self.app.copy(),
+                           {"name": "Steam Desktop", "cmd": "steam"}],
+                  "env": {"FOO": "bar"}}
+        self.assertTrue(sync_apps(config))
+        self.assertEqual(config, {"apps": [{"name": "Steam Desktop", "cmd": "steam"}],
+                                  "env": {"FOO": "bar"}})
 
 
 if __name__ == "__main__":

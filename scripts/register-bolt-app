@@ -51,13 +51,24 @@ def deduplicate_desktops(config):
     return True
 
 
+def sync_apps(config, app=None):
+    changed = deduplicate_desktops(config)
+    if app is not None:
+        return merge_app(config, app) or changed
+    # A disabled build must not advertise the previously installed launcher.
+    apps = config.get("apps", [])
+    retained = [item for item in apps if item.get("name") != "Old School RuneScape"]
+    if retained != apps:
+        config["apps"] = retained
+        changed = True
+    return changed
+
+
 def main(config_path, app_path=None):
     path = Path(config_path)
     config = json.loads(path.read_text(encoding="utf-8"))
-    changed = deduplicate_desktops(config)
-    if app_path is not None:
-        app = json.loads(Path(app_path).read_text(encoding="utf-8"))
-        changed = merge_app(config, app) or changed
+    app = json.loads(Path(app_path).read_text(encoding="utf-8")) if app_path else None
+    changed = sync_apps(config, app)
     if not changed:
         return
 
@@ -75,7 +86,7 @@ def main(config_path, app_path=None):
         if os.path.exists(temporary):
             os.unlink(temporary)
     print("Updated Sunshine apps: deduplicated default Desktop tiles" +
-          (" and registered native Bolt." if app_path else "."))
+          (" and registered native Bolt." if app_path else " and removed disabled Bolt entry."))
 
 
 if __name__ == "__main__":

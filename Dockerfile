@@ -31,6 +31,18 @@ RUN mkdir -p /out \
         *) echo 'ENABLE_BOLT must be true or false' >&2; exit 1 ;; \
     esac
 
+# Stage optional integration assets only when Bolt is enabled. Bind mounts keep
+# the cover, app template, and home helper out of disabled image layers entirely.
+RUN --mount=type=bind,source=sunshine-config,target=/assets \
+    --mount=type=bind,source=scripts,target=/scripts \
+    if [ "$ENABLE_BOLT" = true ]; then \
+        install -d -m 0755 /out/usr/local/share/headless-sunshine-steam/covers \
+        && chmod 0755 /out/usr/local/share/headless-sunshine-steam \
+        && install -m 0644 /assets/osrs-app.json /out/usr/local/share/headless-sunshine-steam/osrs-app.json \
+        && install -m 0644 /assets/covers/bolt-rs.png /out/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png \
+        && install -m 0755 /scripts/prepare-bolt-home /out/usr/local/bin/prepare-bolt-home; \
+    fi
+
 FROM ubuntu:24.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -114,14 +126,7 @@ RUN curl -fL \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
-COPY --chmod=0644 sunshine-config/osrs-app.json /usr/local/share/headless-sunshine-steam/osrs-app.json
-COPY --chmod=0644 sunshine-config/covers/bolt-rs.png /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png
-# Directory traversal permissions are separate from the PNG's read permissions.
-RUN chmod 0755 /usr/local/share/headless-sunshine-steam \
-        /usr/local/share/headless-sunshine-steam/covers \
-    && chmod 0644 /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png
 COPY --chmod=0755 scripts/register-bolt-app /usr/local/bin/register-bolt-app
-COPY --chmod=0755 scripts/prepare-bolt-home /usr/local/bin/prepare-bolt-home
 
 # Only runtime libraries and Java for RuneLite enter the optional gaming image.
 RUN if [ "$ENABLE_BOLT" = true ]; then \
@@ -185,7 +190,15 @@ RUN install -d -o gamer -g gamer \
 
 # Validate cover access as Sunshine's actual runtime user, not build-time root.
 USER gamer
-RUN python3 -c "from pathlib import Path; p = Path('/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png'); assert p.open('rb').read(8).hex() == '89504e470d0a1a0a', 'Invalid cover PNG'"
+RUN if [ "$ENABLE_BOLT" = true ]; then \
+        python3 -c "from pathlib import Path; p = Path('/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png'); assert p.open('rb').read(8).hex() == '89504e470d0a1a0a', 'Invalid cover PNG'"; \
+    else \
+        test ! -e /usr/local/bin/bolt \
+        && test ! -e /opt/bolt-launcher \
+        && test ! -e /usr/local/bin/prepare-bolt-home \
+        && test ! -e /usr/local/share/headless-sunshine-steam/osrs-app.json \
+        && test ! -e /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png; \
+    fi
 USER root
 
 WORKDIR /home/gamer
