@@ -83,6 +83,10 @@ https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install
 
 Sunshine uses `uinput` for virtual mouse, keyboard and controller devices.
 
+At startup, the container adds `gamer` to the groups owning the exposed uinput,
+DRI, and input event/joystick devices. No host-specific group number is needed
+in Compose; existing device-node permissions are retained.
+
 Check:
 
 ```bash
@@ -172,6 +176,11 @@ Follow the logs:
 docker compose logs -f sunshine-steam
 ```
 On the first start, Steam may take some time to install/update.
+
+The Dockerfile pins Sunshine with `SUNSHINE_VERSION`. Its Ubuntu package filename
+is derived from that version. When choosing a release with a different package
+naming convention, also pass `--build-arg SUNSHINE_DEB_NAME=<release-asset-name>`
+to `docker compose build`.
 
 ---
 
@@ -368,14 +377,20 @@ Compose security settings.
 When Bolt is installed, container startup registers **Old School RuneScape** in
 Sunshine, including installations with an existing persistent app list. Refresh
 Moonlight's applications and select **Old School RuneScape**. Startup also removes
-duplicate plain **Desktop** entries from existing app lists, keeping the first.
+equivalent duplicate **Desktop** entries from existing app lists, keeping the first.
+Entries with different preparation commands, artwork, or other settings are preserved.
 **Low Res Desktop**, **Steam Desktop**, and other launchers remain available.
 
-Registration preserves other applications and custom settings. For an existing
-entry using the default desktop artwork, it installs the bundled Bolt × RS cover;
-custom cover paths are preserved. For an existing
-**Old School RuneScape** entry, it clears **Command** and updates **Detached
-Command** to launch Bolt directly and record startup errors:
+Registration marks entries it owns with `x-headless-sunshine-steam-managed: bolt`.
+It also recognizes this branch's earlier entry by its exact Bolt launch command
+and bundled cover path. Independently configured applications are preserved.
+If an independent **Old School RuneScape** entry already exists, registration
+leaves it untouched and logs the name conflict; rename that entry to allow
+automatic Bolt registration.
+
+For a managed entry, registration preserves custom artwork and settings, clears
+**Command**, and updates **Detached Command** to launch Bolt directly and record
+startup errors. Default desktop artwork is replaced with the bundled Bolt × RS cover:
 
 ```text
 setsid env DISPLAY=:0 /usr/local/bin/bolt >> /home/gamer/.local/state/bolt-launcher.log 2>&1
@@ -402,8 +417,8 @@ Changing `.env` followed by `docker compose restart` does not rebuild the image.
 
 With `ENABLE_BOLT=false` (the default), the build skips Bolt/CEF downloads and
 compilation, extra runtime dependencies, and the Bolt home helper, cover, and
-Sunshine app template. Startup removes any previously registered **Old School
-RuneScape** entry from the persistent Sunshine app list. Saved Bolt/RuneLite data
+Sunshine app template. Startup removes only this integration's managed Bolt
+entries from the persistent Sunshine app list. Saved Bolt/RuneLite data
 remains intact; enabling Bolt again restores the app entry.
 
 After changing the flag in `.env`, rebuild and recreate the container:

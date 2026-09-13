@@ -50,6 +50,8 @@ ARG ENABLE_BOLT
 
 # Pin Sunshine for reproducible builds.
 ARG SUNSHINE_VERSION=v2026.906.222525
+# Optional override for releases using a different package naming convention.
+ARG SUNSHINE_DEB_NAME
 
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 
@@ -117,8 +119,9 @@ RUN dpkg --add-architecture i386 \
 RUN ln -sf /usr/games/steam /usr/local/bin/steam
 
 # Install Sunshine.
-RUN curl -fL \
-	"https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine_2026.906.222525-1+ubuntu24.04_amd64.deb" \
+RUN sunshine_deb="${SUNSHINE_DEB_NAME:-sunshine_${SUNSHINE_VERSION#v}-1+ubuntu24.04_amd64.deb}" \
+    && curl -fL \
+        "https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/${sunshine_deb}" \
         -o /tmp/sunshine.deb \
     && apt-get update \
     && apt-get install -y /tmp/sunshine.deb \
@@ -425,7 +428,7 @@ add_device_group /dev/uinput
 add_device_group /dev/input
 add_device_group /dev/dri
 
-for device in /dev/dri/card* /dev/dri/renderD*; do
+for device in /dev/dri/card* /dev/dri/renderD* /dev/input/event* /dev/input/js*; do
     [[ -e "$device" ]] && add_device_group "$device"
 done
 

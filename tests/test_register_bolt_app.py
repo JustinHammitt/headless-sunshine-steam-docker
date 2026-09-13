@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 merge_app = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["merge_app"]
 deduplicate_desktops = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["deduplicate_desktops"]
 sync_apps = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["sync_apps"]
+MANAGED_KEY = "x-headless-sunshine-steam-managed"
 
 
 class RegisterBoltAppTests(unittest.TestCase):
@@ -27,6 +28,7 @@ class RegisterBoltAppTests(unittest.TestCase):
 
     def test_repairs_launch_fields_without_losing_custom_settings(self):
         config = {"apps": [{
+            MANAGED_KEY: "bolt",
             "name": "Old School RuneScape",
             "cmd": "steam",
             "detached": [],
@@ -93,13 +95,68 @@ class RegisterBoltAppTests(unittest.TestCase):
         self.assertTrue(sync_apps(config, self.app))
         self.assertEqual(config["apps"][-1], self.app)
 
-    def test_disabled_removes_all_osrs_entries_only(self):
+    def test_disabled_removes_managed_duplicates_only(self):
         config = {"apps": [self.app.copy(), self.app.copy(),
                            {"name": "Steam Desktop", "cmd": "steam"}],
                   "env": {"FOO": "bar"}}
         self.assertTrue(sync_apps(config))
         self.assertEqual(config, {"apps": [{"name": "Steam Desktop", "cmd": "steam"}],
                                   "env": {"FOO": "bar"}})
+
+    def test_independent_osrs_app_survives_enabled_and_disabled_builds(self):
+        independent = {"name": "Old School RuneScape", "cmd": "my-launcher",
+                       "image-path": "my-cover.png"}
+        config = {"apps": [independent], "env": {"CUSTOM": "value"}}
+        original = copy.deepcopy(config)
+        self.assertFalse(sync_apps(config, self.app))
+        self.assertEqual(config, original)
+        self.assertFalse(sync_apps(config))
+        self.assertEqual(config, original)
+
+    def test_adopts_legacy_bundled_app_and_removes_it_when_disabled(self):
+        legacy = dict(self.app)
+        del legacy[MANAGED_KEY]
+        config = {"apps": [legacy]}
+        self.assertTrue(sync_apps(config, self.app))
+        self.assertEqual(config["apps"][0][MANAGED_KEY], "bolt")
+        self.assertFalse(sync_apps(config, self.app))
+        self.assertTrue(sync_apps(config))
+        self.assertEqual(config["apps"], [])
+
+    def test_disabled_recognizes_legacy_without_intermediate_enabled_build(self):
+        legacy = dict(self.app)
+        del legacy[MANAGED_KEY]
+        config = {"apps": [legacy]}
+        self.assertTrue(sync_apps(config))
+        self.assertEqual(config["apps"], [])
+
+    def test_partial_legacy_matches_do_not_claim_user_apps(self):
+        for change in ({"image-path": "custom.png"}, {"detached": ["custom-launcher"]}):
+            independent = {**self.app, **change}
+            del independent[MANAGED_KEY]
+            config = {"apps": [independent]}
+            original = copy.deepcopy(config)
+            self.assertFalse(sync_apps(config, self.app))
+            self.assertEqual(config, original)
+            self.assertFalse(sync_apps(config))
+            self.assertEqual(config, original)
+
+    def test_managed_entry_can_be_renamed_without_losing_ownership(self):
+        config = {"apps": [{**self.app, "name": "My RuneLite"}]}
+        self.assertFalse(sync_apps(config, self.app))
+        self.assertEqual(config["apps"][0]["name"], "My RuneLite")
+        self.assertTrue(sync_apps(config))
+        self.assertEqual(config["apps"], [])
+
+    def test_distinct_desktop_configurations_are_preserved(self):
+        config = {"apps": [
+            {"name": "Desktop", "prep-cmd": [{"do": "mode-a"}]},
+            {"name": "Desktop", "prep-cmd": [{"do": "mode-b"}]},
+            {"name": "Desktop", "image-path": "custom.png"},
+        ]}
+        original = copy.deepcopy(config)
+        self.assertFalse(deduplicate_desktops(config))
+        self.assertEqual(config, original)
 
 
 if __name__ == "__main__":
