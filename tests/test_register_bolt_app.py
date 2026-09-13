@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 merge_app = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["merge_app"]
+deduplicate_desktops = runpy.run_path(str(ROOT / "scripts/register-bolt-app"))["deduplicate_desktops"]
 
 
 class RegisterBoltAppTests(unittest.TestCase):
@@ -46,6 +47,30 @@ class RegisterBoltAppTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 merge_app(config, self.app)
             self.assertEqual(config, original)
+
+    def test_keeps_first_desktop_and_preserves_other_launchers(self):
+        retained = [
+            {"name": "Low Res Desktop", "image-path": "desktop.png"},
+            self.app,
+            {"name": "Steam Desktop", "cmd": "steam"},
+            {"name": "Desktop", "cmd": "custom-launcher"},
+            {"name": "Desktop", "detached": ["custom-launcher"]},
+        ]
+        config = {"apps": [
+            {"name": "Desktop", "image-path": "desktop.png"},
+            {"name": "Desktop", "cmd": "", "detached": []},
+        ] + copy.deepcopy(retained), "env": {"FOO": "bar"}}
+        first_desktop = copy.deepcopy(config["apps"][0])
+        self.assertTrue(deduplicate_desktops(config))
+        self.assertEqual(config["apps"], [first_desktop] + retained)
+        self.assertEqual(config["env"], {"FOO": "bar"})
+        self.assertFalse(deduplicate_desktops(config))
+
+    def test_single_desktop_is_unchanged(self):
+        config = {"apps": [{"name": "Desktop", "image-path": "custom.png"}]}
+        original = copy.deepcopy(config)
+        self.assertFalse(deduplicate_desktops(config))
+        self.assertEqual(config, original)
 
 
 if __name__ == "__main__":

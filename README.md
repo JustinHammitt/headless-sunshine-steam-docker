@@ -367,8 +367,9 @@ Compose security settings.
 
 When Bolt is installed, container startup registers **Old School RuneScape** in
 Sunshine, including installations with an existing persistent app list. Refresh
-Moonlight's applications and select **Old School RuneScape**. The **Desktop** app
-continues to open only the desktop.
+Moonlight's applications and select **Old School RuneScape**. Startup also removes
+duplicate plain **Desktop** entries from existing app lists, keeping the first.
+**Low Res Desktop**, **Steam Desktop**, and other launchers remain available.
 
 Registration preserves other applications and custom settings. For an existing
 **Old School RuneScape** entry, it clears **Command** and updates **Detached

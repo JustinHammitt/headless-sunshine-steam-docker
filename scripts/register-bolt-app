@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Register the installed Bolt launcher without replacing other Sunshine apps."""
+"""Deduplicate default Desktop tiles and optionally register the Bolt launcher."""
 
 import json
 import os
@@ -26,11 +26,37 @@ def merge_app(config, app):
     return True
 
 
-def main(config_path, app_path):
+def deduplicate_desktops(config):
+    apps = config.get("apps", [])
+    if not isinstance(apps, list) or any(not isinstance(item, dict) for item in apps):
+        raise ValueError("Sunshine apps must be an array of objects")
+    retained = []
+    desktop_seen = False
+    for item in apps:
+        plain_desktop = (
+            item.get("name") == "Desktop"
+            and not item.get("cmd", "").strip()
+            and not any(command.strip() for command in item.get("detached", []))
+        )
+        if plain_desktop:
+            if desktop_seen:
+                continue
+            desktop_seen = True
+        retained.append(item)
+    if retained == apps:
+        return False
+    config["apps"] = retained
+    return True
+
+
+def main(config_path, app_path=None):
     path = Path(config_path)
     config = json.loads(path.read_text(encoding="utf-8"))
-    app = json.loads(Path(app_path).read_text(encoding="utf-8"))
-    if not merge_app(config, app):
+    changed = deduplicate_desktops(config)
+    if app_path is not None:
+        app = json.loads(Path(app_path).read_text(encoding="utf-8"))
+        changed = merge_app(config, app) or changed
+    if not changed:
         return
 
     metadata = path.stat()
@@ -46,7 +72,8 @@ def main(config_path, app_path):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    print("Registered Old School RuneScape in Sunshine (native Bolt).")
+    print("Updated Sunshine apps: deduplicated default Desktop tiles" +
+          (" and registered native Bolt." if app_path else "."))
 
 
 if __name__ == "__main__":

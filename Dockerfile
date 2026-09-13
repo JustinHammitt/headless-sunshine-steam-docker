@@ -49,6 +49,7 @@ RUN dpkg --add-architecture i386 \
         ca-certificates \
         curl \
         wget \
+        python3 \
         software-properties-common \
     && add-apt-repository -y multiverse \
     && apt-get update \
@@ -126,7 +127,7 @@ RUN if [ "$ENABLE_BOLT" = true ]; then \
             libcups2t64 libasound2t64 libgbm1 libdrm2 libxkbcommon0 \
             libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
             libglib2.0-0t64 libdbus-1-3 libx11-6 libxcb1 libxext6 \
-            libxshmfence1 fonts-dejavu-core openjdk-17-jre python3 \
+            libxshmfence1 fonts-dejavu-core openjdk-17-jre \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -482,6 +483,8 @@ if [[ -x /usr/local/bin/bolt ]]; then
     /usr/local/bin/register-bolt-app \
         "${SUNSHINE_DIR}/apps.json" \
         /usr/local/share/headless-sunshine-steam/osrs-app.json
+else
+    /usr/local/bin/register-bolt-app "${SUNSHINE_DIR}/apps.json"
 fi
 
 touch "$SUNSHINE_CONF"
