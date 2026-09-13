@@ -263,6 +263,24 @@ Configure the desired resolution, FPS and bitrate in the Moonlight client.
 
 The container automatically changes the virtual Xorg desktop to the client-requested resolution when the stream starts.
 
+Resolution switching detects the active primary X11 output, or the first active
+output when there is no active primary. It works with connector names such as
+`DP-0`, `DVI-D-0`, and `HDMI-0`. The requested size comes from Moonlight's streaming
+settings, not from automatic detection of the physical client monitor. Choose
+the resolution and aspect ratio you want in Moonlight.
+
+The script reuses a mode supported by the selected output and chooses its closest
+available refresh rate to the requested FPS. If the size is missing, it attempts
+to create and attach a CVT mode; the driver must support that mode. On session
+cleanup, it restores the output's previous mode and refresh rate. Restore state
+is kept in `/run/user/1000/sunshine-resolution.json` until restoration succeeds.
+The existing headless Xorg defaults remain unchanged. With multiple active
+outputs, Sunshine's capture output should match the primary output being resized.
+
+To apply resolution-script updates to an existing installation, close games and
+run `docker compose up -d --build sunshine-steam`, then start a new Moonlight
+session. The existing Sunshine preparation-command paths remain the same.
+
 ---
 
 ## Add the game library to Steam

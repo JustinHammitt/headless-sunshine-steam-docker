@@ -131,6 +131,7 @@ RUN sunshine_deb="${SUNSHINE_DEB_NAME:-sunshine_${SUNSHINE_VERSION#v}-1+ubuntu24
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
 COPY --chmod=0755 scripts/register-bolt-app /usr/local/bin/register-bolt-app
 COPY --chmod=0755 scripts/prepare-openbox-config /usr/local/bin/prepare-openbox-config
+COPY --chmod=0755 scripts/sunshine-resolution /usr/local/bin/sunshine-resolution
 
 # Only runtime libraries and Java for RuneLite enter the optional gaming image.
 RUN if [ "$ENABLE_BOLT" = true ]; then \
@@ -285,41 +286,7 @@ RUN chmod +x /usr/local/bin/generate-xorg-config
 # Switch the virtual display to the resolution requested by the client.
 RUN cat > /usr/local/bin/sunshine-resolution-do <<'EOF'
 #!/bin/bash
-set -euo pipefail
-
-export DISPLAY=:0
-
-W="${SUNSHINE_CLIENT_WIDTH:-3840}"
-H="${SUNSHINE_CLIENT_HEIGHT:-2160}"
-FPS="${SUNSHINE_CLIENT_FPS:-60}"
-
-BASE_MODE="${W}x${H}"
-
-# Prefer a mode the NVIDIA driver already exposes.
-if xrandr | grep -qE "^[[:space:]]+${BASE_MODE}[[:space:]]"; then
-    xrandr --output DP-0 --mode "$BASE_MODE"
-    exit 0
-fi
-
-MODELINE="$(cvt "$W" "$H" "$FPS" | grep '^Modeline')"
-NAME="$(awk '{print $2}' <<< "$MODELINE" | tr -d '"')"
-
-# The same dynamically-created mode may already exist from a previous stream.
-if ! xrandr --query | grep -qE "^[[:space:]]+${NAME}[[:space:]]"; then
-    read -r CLOCK H1 H2 H3 H4 V1 V2 V3 V4 HSYNC VSYNC <<< \
-        "$(awk '{print $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13}' <<< "$MODELINE")"
-
-    xrandr --newmode \
-        "$NAME" "$CLOCK" \
-        "$H1" "$H2" "$H3" "$H4" \
-        "$V1" "$V2" "$V3" "$V4" \
-        "$HSYNC" "$VSYNC"
-fi
-
-# It may exist globally but not yet be associated with DP-0.
-xrandr --addmode DP-0 "$NAME" 2>/dev/null || true
-
-xrandr --output DP-0 --mode "$NAME"
+exec /usr/local/bin/sunshine-resolution do
 EOF
 
 RUN chmod +x /usr/local/bin/sunshine-resolution-do
@@ -331,7 +298,7 @@ export DISPLAY=:0
 
 steam -shutdown >/dev/null 2>&1 || true
 
-xrandr --output DP-0 --mode 3840x2160 --rate 60
+exec /usr/local/bin/sunshine-resolution undo
 EOF
 
 RUN chmod +x /usr/local/bin/sunshine-resolution-undo
