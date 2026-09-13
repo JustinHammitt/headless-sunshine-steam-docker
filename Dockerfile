@@ -130,6 +130,7 @@ RUN sunshine_deb="${SUNSHINE_DEB_NAME:-sunshine_${SUNSHINE_VERSION#v}-1+ubuntu24
 
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
 COPY --chmod=0755 scripts/register-bolt-app /usr/local/bin/register-bolt-app
+COPY --chmod=0755 scripts/prepare-openbox-config /usr/local/bin/prepare-openbox-config
 
 # Only runtime libraries and Java for RuneLite enter the optional gaming image.
 RUN if [ "$ENABLE_BOLT" = true ]; then \
@@ -380,7 +381,19 @@ fi
 
 pactl set-default-sink headless
 
-openbox &
+# Derive the session configuration each start so persistent homes also receive
+# title bars, while keeping the user's original bindings, theme and rules.
+OPENBOX_SOURCE="${XDG_CONFIG_HOME:-$HOME/.config}/openbox/rc.xml"
+if [[ ! -f "$OPENBOX_SOURCE" ]]; then
+    OPENBOX_SOURCE=/etc/xdg/openbox/rc.xml
+fi
+OPENBOX_CONFIG="$XDG_RUNTIME_DIR/openbox-rc.xml"
+if /usr/local/bin/prepare-openbox-config "$OPENBOX_SOURCE" "$OPENBOX_CONFIG"; then
+    openbox --config-file "$OPENBOX_CONFIG" &
+else
+    echo 'Unable to prepare Openbox title bars; using the existing configuration.' >&2
+    openbox &
+fi
 PIDS+=("$!")
 
 picom --backend glx &

@@ -401,6 +401,58 @@ the existing gamer session's runtime and audio environment. A detached applicati
 continues running after the stream ends; close RuneLite and Bolt from the desktop
 when finished.
 
+## Arrange multiple game clients
+
+The streamed desktop runs Openbox and explicitly enables its title bars and
+borders for normal application windows, including windowed game clients. Drag
+the title bar to move a client, or drag its borders to resize it. Fullscreen
+windows still need to be switched to windowed mode to show decorations.
+
+Rebuild and recreate the container to apply this to an existing installation
+(this stops the current session, so close your games first):
+
+```bash
+docker compose up -d --build sunshine-steam
+```
+
+Each session derives `/run/user/1000/openbox-rc.xml` from the saved
+`/home/gamer/.config/openbox/rc.xml`, or the image's default configuration when
+there is no saved file. It adds a final rule enabling decorations for normal
+windows. Your saved file is not modified; other settings and bindings are kept.
+Applications with their own title bars may display both their own bar and the
+Openbox bar.
+
+With the default
+[Openbox controls](https://openbox.org/help/DefaultConfiguration), use:
+
+- **Alt + left mouse drag** anywhere inside a window to move it.
+- **Alt + right mouse drag** inside a window to resize it.
+- **Alt + Space** to open the focused window's menu, including move, resize,
+  and maximize/restore controls.
+- **Alt + Tab** to switch between open windows, including Bolt and game clients.
+
+For two accounts, launch each character's client through Bolt, keep both clients
+in windowed mode, and resize and move them beside each other in the same stream.
+Restore maximized windows before arranging them. Client minimum sizes can limit
+how small each window can become; increase the Moonlight streaming resolution
+if both do not fit. These controls arrange windows; each client receives manual
+input when focused.
+
+These shortcuts require Moonlight to pass the keys to the host and assume the
+default Openbox bindings. If Alt-drag has no effect, check that Openbox is running:
+
+```bash
+docker compose exec -u gamer sunshine-steam pgrep -a openbox
+```
+
+A saved `/home/gamer/.config/openbox/rc.xml` (host path
+`./data/.config/openbox/rc.xml`) can override the default shortcuts. Check that
+file and the container logs if window controls are missing. If configuration
+generation fails, startup logs the error and launches Openbox with its existing
+configuration.
+
+## Troubleshoot the Bolt application
+
 The app object is provided in `sunshine-config/osrs-app.json`. Registration does
 not prove Bolt can launch: complete the native validation above. If Moonlight
 shows only the desktop after selecting **Old School RuneScape**, read the log:

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Build a session config with visible title bars, preserving the saved config."""
+
+import argparse
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+
+def prepare_config(source, destination):
+    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+    tree = ET.parse(source, parser=parser)
+    root = tree.getroot()
+    namespace = "http://openbox.org/3.4/rc"
+    if root.tag == f"{{{namespace}}}openbox_config":
+        ET.register_namespace("", namespace)
+        prefix = f"{{{namespace}}}"
+    elif root.tag == "openbox_config":
+        prefix = ""
+    else:
+        raise ValueError(f"Not an Openbox configuration: {source}")
+
+    applications = root.find(f"{prefix}applications")
+    if applications is None:
+        applications = ET.SubElement(root, f"{prefix}applications")
+    # Openbox applies later matching rules last. Override saved decor=no rules
+    # for normal windows, without changing their geometry or fullscreen state.
+    rule = ET.SubElement(applications, f"{prefix}application", {
+        "class": "*", "type": "normal",
+    })
+    ET.SubElement(rule, f"{prefix}decor").text = "yes"
+    tree.write(destination, encoding="utf-8", xml_declaration=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("destination", type=Path)
+    args = parser.parse_args()
+    prepare_config(args.source, args.destination)
