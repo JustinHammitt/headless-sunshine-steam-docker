@@ -1,0 +1,34 @@
+# Runtime / persistent container data
+data/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Downloaded packages / archives
+*.rpm
+*.deb
+*.tar
+*.tar.gz
+*.tar.xz
+*.zip
+
+# Logs / temp files
+*.log
+*.tmp
+*.swp
+*~
+
+# IDE / editor state
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python/tooling junk
+__pycache__/
+*.pyc

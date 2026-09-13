@@ -5,7 +5,7 @@ FROM ubuntu:24.04
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Pin Sunshine for reproducible builds.
-ARG SUNSHINE_VERSION=v2026.516.143833
+ARG SUNSHINE_VERSION=v2026.906.222525
 
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 
@@ -14,8 +14,14 @@ ENV NVIDIA_DRIVER_CAPABILITIES=all
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
+        ca-certificates \	
+	curl \
+	rpm \
+	libnss3 \
+	libnspr4 \
+	rpm2cpio \
+	cpio \
+	wget \
         software-properties-common \
     && add-apt-repository -y multiverse \
     && apt-get update \
@@ -72,7 +78,7 @@ RUN ln -sf /usr/games/steam /usr/local/bin/steam
 
 # Install Sunshine.
 RUN curl -fL \
-        "https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine-ubuntu-24.04-amd64.deb" \
+	"https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine_2026.906.222525-1+ubuntu24.04_amd64.deb" \
         -o /tmp/sunshine.deb \
     && apt-get update \
     && apt-get install -y /tmp/sunshine.deb \
@@ -80,6 +86,26 @@ RUN curl -fL \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
+
+# Install Bolt from Terra RPM
+RUN curl -fL \
+    "https://repos.fyralabs.com/terra43/bolt-launcher-0:0.24.0-1.fc43.x86_64.rpm" \
+    -o /tmp/bolt.rpm \
+    && mkdir -p /tmp/bolt-extract \
+    && cd /tmp/bolt-extract \
+    && rpm2cpio /tmp/bolt.rpm | cpio -idm \
+    && cp -a ./usr/. /usr/ \
+    && rm -rf /tmp/bolt.rpm /tmp/bolt-extract
+
+# Install Fedora CEF runtime required by Terra Bolt
+RUN curl -fL \
+    "https://download.fedoraproject.org/pub/fedora/linux/updates/43/Everything/x86_64/Packages/c/cef-146.0.11%5Echromium146.0.7680.177-2.fc43.x86_64.rpm" \
+    -o /tmp/cef.rpm \
+    && mkdir -p /tmp/cef-extract \
+    && cd /tmp/cef-extract \
+    && rpm2cpio /tmp/cef.rpm | cpio -idm \
+    && cp -a ./usr/. /usr/ \
+    && rm -rf /tmp/cef.rpm /tmp/cef-extract
 
 # Create the user that owns the persistent home directory.
 RUN set -eux; \

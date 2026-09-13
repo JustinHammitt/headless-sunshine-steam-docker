@@ -31,6 +31,9 @@ services:
       - /dev/uinput:/dev/uinput
       - /dev/dri:/dev/dri
 
+    group_add:
+      - "996"
+
     volumes:
       - /dev/input:/dev/input
       - /run/udev:/run/udev:ro
@@ -47,3 +50,4 @@ services:
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+
