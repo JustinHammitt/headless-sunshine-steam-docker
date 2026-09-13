@@ -1,8 +1,40 @@
 # syntax=docker/dockerfile:1.7
 
-FROM ubuntu:24.04
+ARG ENABLE_BOLT=false
+
+# Compile against the same Ubuntu userspace and CEF bundle used at runtime.
+FROM ubuntu:24.04 AS bolt-builder
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ENABLE_BOLT
+ARG BOLT_VERSION=0.24.0
+ARG BOLT_COMMIT=d8589d80f9849e51f121646e31daa5be7038da28
+ARG CEF_VERSION=139.0.7258.139
+ARG CEF_SHA256=aeb98ff1f621c8f7c5f0be6c34acefaf4fe4be763004a9d2a9e933d1cd914650
+ARG BOLT_BUILD_JOBS=2
+
+COPY --chmod=0755 scripts/build-bolt /usr/local/bin/build-bolt
+RUN mkdir -p /out \
+    && case "$ENABLE_BOLT" in \
+        true) \
+            test "$(dpkg --print-architecture)" = amd64 \
+            && apt-get update \
+            && apt-get install -y --no-install-recommends \
+                ca-certificates curl git build-essential cmake ninja-build \
+                pkg-config libx11-dev libxcb1-dev libarchive-dev xz-utils \
+                libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+                libatspi2.0-0t64 libgtk-3-0t64 libcups2t64 libasound2t64 \
+                libgbm1 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+                libxfixes3 libxrandr2 libglib2.0-0t64 libdbus-1-3 \
+                libxext6 libxshmfence1 \
+            && /usr/local/bin/build-bolt ;; \
+        false) ;; \
+        *) echo 'ENABLE_BOLT must be true or false' >&2; exit 1 ;; \
+    esac
+
+FROM ubuntu:24.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG ENABLE_BOLT
 
 # Pin Sunshine for reproducible builds.
 ARG SUNSHINE_VERSION=v2026.906.222525
@@ -14,14 +46,9 @@ ENV NVIDIA_DRIVER_CAPABILITIES=all
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \	
-	curl \
-	rpm \
-	libnss3 \
-	libnspr4 \
-	rpm2cpio \
-	cpio \
-	wget \
+        ca-certificates \
+        curl \
+        wget \
         software-properties-common \
     && add-apt-repository -y multiverse \
     && apt-get update \
@@ -87,25 +114,31 @@ RUN curl -fL \
 
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
 
-# Install Bolt from Terra RPM
-RUN curl -fL \
-    "https://repos.fyralabs.com/terra43/bolt-launcher-0:0.24.0-1.fc43.x86_64.rpm" \
-    -o /tmp/bolt.rpm \
-    && mkdir -p /tmp/bolt-extract \
-    && cd /tmp/bolt-extract \
-    && rpm2cpio /tmp/bolt.rpm | cpio -idm \
-    && cp -a ./usr/. /usr/ \
-    && rm -rf /tmp/bolt.rpm /tmp/bolt-extract
+# Only runtime libraries and Java for RuneLite enter the optional gaming image.
+RUN if [ "$ENABLE_BOLT" = true ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            libarchive13t64 libstdc++6 libnss3 libnspr4 libatk1.0-0t64 \
+            libatk-bridge2.0-0t64 libatspi2.0-0t64 libgtk-3-0t64 \
+            libcups2t64 libasound2t64 libgbm1 libdrm2 libxkbcommon0 \
+            libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+            libglib2.0-0t64 libdbus-1-3 libx11-6 libxcb1 libxext6 \
+            libxshmfence1 fonts-dejavu-core openjdk-17-jre \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
-# Install Fedora CEF runtime required by Terra Bolt
-RUN curl -fL \
-    "https://download.fedoraproject.org/pub/fedora/linux/updates/43/Everything/x86_64/Packages/c/cef-146.0.11%5Echromium146.0.7680.177-2.fc43.x86_64.rpm" \
-    -o /tmp/cef.rpm \
-    && mkdir -p /tmp/cef-extract \
-    && cd /tmp/cef-extract \
-    && rpm2cpio /tmp/cef.rpm | cpio -idm \
-    && cp -a ./usr/. /usr/ \
-    && rm -rf /tmp/cef.rpm /tmp/cef-extract
+COPY --from=bolt-builder /out/ /
+
+# Fail the image build on missing libraries or incompatible symbol versions.
+RUN if [ "$ENABLE_BOLT" = true ]; then \
+        for binary in /opt/bolt-launcher/bolt /opt/bolt-launcher/*.so*; do \
+            ldd "$binary" > /tmp/bolt-ldd.txt 2>&1 \
+                || { cat /tmp/bolt-ldd.txt; exit 1; }; \
+            cat /tmp/bolt-ldd.txt; \
+            if grep -q 'not found' /tmp/bolt-ldd.txt; then exit 1; fi; \
+        done; \
+        rm -f /tmp/bolt-ldd.txt; \
+    fi
 
 # Create the user that owns the persistent home directory.
 RUN set -eux; \

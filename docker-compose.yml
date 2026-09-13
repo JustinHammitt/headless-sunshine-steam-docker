@@ -2,6 +2,8 @@ services:
   sunshine-steam:
     build:
       context: .
+      args:
+        ENABLE_BOLT: "${ENABLE_BOLT:-false}"
     image: headless-sunshine-steam:local
     container_name: headless-sunshine-steam
     restart: unless-stopped

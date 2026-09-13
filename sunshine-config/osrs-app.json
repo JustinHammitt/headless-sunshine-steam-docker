@@ -1,0 +1,9 @@
+{
+    "name": "Old School RuneScape",
+    "cmd": "",
+    "detached": [
+        "setsid env DISPLAY=:0 /usr/local/bin/bolt"
+    ],
+    "image-path": "desktop.png",
+    "exclude-global-prep-cmd": false
+}

@@ -291,6 +291,98 @@ After that, Steam should see the mounted library normally.
 
 ---
 
+# Optional: Old School RuneScape with Bolt
+
+Native Bolt support is experimental and disabled by default. Enable it in `.env`:
+
+```dotenv
+ENABLE_BOLT=true
+```
+
+Then rebuild and recreate the container:
+
+```bash
+docker compose build sunshine-steam
+docker compose up -d sunshine-steam
+```
+
+The `bolt-builder` stage compiles [Bolt 0.24.0 from Codeberg](https://codeberg.org/Adamcake/Bolt/src/tag/0.24.0)
+at commit `d8589d80f9849e51f121646e31daa5be7038da28`, including its pinned
+submodules. It uses the committed `app/dist` frontend and builds the CEF C++
+wrapper from [Adamcake's native Linux CEF distribution](https://adamcake.com/cef).
+The archive is `cef-139.0.7258.139-linux-x86_64-minimal-ungoogled.tar.xz`,
+verified with SHA-256
+`aeb98ff1f621c8f7c5f0be6c34acefaf4fe4be763004a9d2a9e933d1cd914650`.
+
+Both stages use Ubuntu 24.04. CMake installs Bolt and that same CEF bundle under
+`/opt/bolt-launcher`, with its launcher at `/usr/local/bin/bolt`. Only the installed
+output is copied into the gaming image; compiler, CMake, Git, source trees, and
+development headers stay in the builder. Runtime libraries and OpenJDK 17 for
+RuneLite are installed only when enabled. This build supports Linux amd64.
+Bolt's optional RuneScape plugin library is omitted; RuneLite plugins are independent.
+
+The build defaults to two compilation jobs to limit memory use. To change it:
+
+```bash
+docker compose build --build-arg BOLT_BUILD_JOBS=4 sunshine-steam
+```
+
+Bolt and CEF source pins are recorded in `/opt/bolt-launcher/build-info.txt`.
+Changing the CEF version also requires updating its checksum and rebuilding Bolt;
+do not replace `libcef.so` independently. These pins do not freeze Ubuntu package
+repositories or RuneLite's downloaded client updates.
+
+## Validate the native launcher first
+
+Connect to Sunshine's **Desktop** application in Moonlight, then run Bolt as the
+existing gamer user inside the running container:
+
+```bash
+docker compose exec -u gamer \
+  -e DISPLAY=:0 \
+  -e XDG_RUNTIME_DIR=/run/user/1000 \
+  -e PULSE_SERVER=unix:/run/user/1000/pulse/native \
+  sunshine-steam /usr/local/bin/bolt
+```
+
+Check that the launcher renders and accepts mouse/keyboard input, sign in with
+your Jagex Account, select a character, and launch RuneLite. Close both normally,
+recreate the container, and verify settings and login state persist. Bolt's XDG
+configuration/data and RuneLite's files remain under the mounted `/home/gamer`.
+Account login is performed interactively; no credentials belong in the image or
+build arguments.
+
+Image builds check shared-library resolution, including GLIBC symbol errors.
+A successful build does not validate X11 rendering, CEF subprocess startup,
+Jagex login, or RuneLite launch. These require the running server test above.
+Adamcake's CEF 139 uses a namespace sandbox; if startup reports sandbox errors,
+capture the terminal output before proceeding. This integration adds no sandbox
+bypass flags, capabilities, host configuration, or changes to the existing
+Compose security settings.
+
+## Add the Sunshine application after validation
+
+In the Sunshine Web UI, add an application named **Old School RuneScape**.
+Leave **Command** empty and add this **Detached Command**:
+
+```text
+setsid env DISPLAY=:0 /usr/local/bin/bolt
+```
+
+Keep global preparation commands enabled for resolution switching. Save, refresh
+Moonlight's applications, and test starting **Old School RuneScape**. Bolt inherits
+the existing gamer session's runtime and audio environment. A detached application
+continues running after the stream ends; close RuneLite and Bolt from the desktop
+when finished.
+
+The equivalent app object is provided in `sunshine-config/osrs-app.json` for
+reference. It is deliberately not installed automatically before runtime
+validation. Existing persistent Sunshine app lists are not overwritten. If you
+later rebuild with `ENABLE_BOLT=false`, remove the app in the Sunshine Web UI;
+the persistent home remains intact.
+
+---
+
 # Networking
 
 The supplied Compose configuration uses host networking so Sunshine discovery and streaming traffic work naturally on the LAN.
