@@ -116,6 +116,10 @@ RUN curl -fL \
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
 COPY --chmod=0644 sunshine-config/osrs-app.json /usr/local/share/headless-sunshine-steam/osrs-app.json
 COPY --chmod=0644 sunshine-config/covers/bolt-rs.png /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png
+# Directory traversal permissions are separate from the PNG's read permissions.
+RUN chmod 0755 /usr/local/share/headless-sunshine-steam \
+        /usr/local/share/headless-sunshine-steam/covers \
+    && chmod 0644 /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png
 COPY --chmod=0755 scripts/register-bolt-app /usr/local/bin/register-bolt-app
 COPY --chmod=0755 scripts/prepare-bolt-home /usr/local/bin/prepare-bolt-home
 
@@ -178,6 +182,11 @@ RUN install -d -o gamer -g gamer \
       /home/gamer/.local/share \
       /home/gamer/.local/state \
       /home/gamer/.cache
+
+# Validate cover access as Sunshine's actual runtime user, not build-time root.
+USER gamer
+RUN python3 -c "from pathlib import Path; p = Path('/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png'); assert p.open('rb').read(8).hex() == '89504e470d0a1a0a', 'Invalid cover PNG'"
+USER root
 
 WORKDIR /home/gamer
 
