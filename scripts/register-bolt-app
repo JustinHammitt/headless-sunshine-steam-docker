@@ -18,6 +18,8 @@ def merge_app(config, app):
             # Repair stale desktop/Steam launch fields but preserve artwork,
             # preparation commands, and other user-customized settings.
             updated = {**app, **existing, "cmd": app["cmd"], "detached": app["detached"]}
+            if existing.get("image-path") in (None, "", "desktop.png"):
+                updated["image-path"] = app["image-path"]
             if updated == existing:
                 return False
             existing.update(updated)

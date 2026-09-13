@@ -115,6 +115,7 @@ RUN curl -fL \
 
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
 COPY --chmod=0644 sunshine-config/osrs-app.json /usr/local/share/headless-sunshine-steam/osrs-app.json
+COPY --chmod=0644 sunshine-config/covers/bolt-rs.png /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png
 COPY --chmod=0755 scripts/register-bolt-app /usr/local/bin/register-bolt-app
 COPY --chmod=0755 scripts/prepare-bolt-home /usr/local/bin/prepare-bolt-home
 

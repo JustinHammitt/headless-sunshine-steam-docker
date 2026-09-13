@@ -72,6 +72,14 @@ class RegisterBoltAppTests(unittest.TestCase):
         self.assertFalse(deduplicate_desktops(config))
         self.assertEqual(config, original)
 
+    def test_upgrades_placeholder_cover_once(self):
+        for old_cover in (None, "", "desktop.png"):
+            existing = {**self.app, "image-path": old_cover}
+            config = {"apps": [existing]}
+            self.assertTrue(merge_app(config, self.app))
+            self.assertEqual(existing["image-path"], self.app["image-path"])
+            self.assertFalse(merge_app(config, self.app))
+
 
 if __name__ == "__main__":
     unittest.main()

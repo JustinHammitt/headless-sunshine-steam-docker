@@ -372,6 +372,8 @@ duplicate plain **Desktop** entries from existing app lists, keeping the first.
 **Low Res Desktop**, **Steam Desktop**, and other launchers remain available.
 
 Registration preserves other applications and custom settings. For an existing
+entry using the default desktop artwork, it installs the bundled Bolt × RS cover;
+custom cover paths are preserved. For an existing
 **Old School RuneScape** entry, it clears **Command** and updates **Detached
 Command** to launch Bolt directly and record startup errors:
 
