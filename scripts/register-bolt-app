@@ -1,0 +1,53 @@
+#!/usr/bin/python3
+"""Register the installed Bolt launcher without replacing other Sunshine apps."""
+
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+
+
+def merge_app(config, app):
+    apps = config.setdefault("apps", [])
+    if not isinstance(apps, list) or any(not isinstance(item, dict) for item in apps):
+        raise ValueError("Sunshine apps must be an array of objects")
+    for existing in apps:
+        if existing.get("name") == app["name"]:
+            # Repair stale desktop/Steam launch fields but preserve artwork,
+            # preparation commands, and other user-customized settings.
+            updated = {**app, **existing, "cmd": app["cmd"], "detached": app["detached"]}
+            if updated == existing:
+                return False
+            existing.update(updated)
+            return True
+    apps.append(app)
+    return True
+
+
+def main(config_path, app_path):
+    path = Path(config_path)
+    config = json.loads(path.read_text(encoding="utf-8"))
+    app = json.loads(Path(app_path).read_text(encoding="utf-8"))
+    if not merge_app(config, app):
+        return
+
+    metadata = path.stat()
+    # Write alongside the original for an atomic replacement on its volume.
+    fd, temporary = tempfile.mkstemp(prefix=".apps-bolt-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(config, output, indent=4)
+            output.write("\n")
+        os.chown(temporary, metadata.st_uid, metadata.st_gid)
+        os.chmod(temporary, stat.S_IMODE(metadata.st_mode))
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print("Registered Old School RuneScape in Sunshine (native Bolt).")
+
+
+if __name__ == "__main__":
+    main(*sys.argv[1:])

@@ -2,7 +2,7 @@
     "name": "Old School RuneScape",
     "cmd": "",
     "detached": [
-        "setsid env DISPLAY=:0 /usr/local/bin/bolt"
+        "setsid env DISPLAY=:0 /usr/local/bin/bolt >> /home/gamer/.local/state/bolt-launcher.log 2>&1"
     ],
     "image-path": "desktop.png",
     "exclude-global-prep-cmd": false

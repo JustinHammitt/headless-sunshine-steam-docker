@@ -349,6 +349,9 @@ Check that the launcher renders and accepts mouse/keyboard input, sign in with
 your Jagex Account, select a character, and launch RuneLite. Close both normally,
 recreate the container, and verify settings and login state persist. Bolt's XDG
 configuration/data and RuneLite's files remain under the mounted `/home/gamer`.
+At startup, the container repairs ownership of the XDG parent directories and
+Bolt's own config/data/runtime directories. This also handles directories left
+by earlier root-run launcher attempts; it does not recursively change Steam data.
 Account login is performed interactively; no credentials belong in the image or
 build arguments.
 
@@ -360,26 +363,42 @@ capture the terminal output before proceeding. This integration adds no sandbox
 bypass flags, capabilities, host configuration, or changes to the existing
 Compose security settings.
 
-## Add the Sunshine application after validation
+## Launch from Moonlight
 
-In the Sunshine Web UI, add an application named **Old School RuneScape**.
-Leave **Command** empty and add this **Detached Command**:
+When Bolt is installed, container startup registers **Old School RuneScape** in
+Sunshine, including installations with an existing persistent app list. Refresh
+Moonlight's applications and select **Old School RuneScape**. The **Desktop** app
+continues to open only the desktop.
+
+Registration preserves other applications and custom settings. For an existing
+**Old School RuneScape** entry, it clears **Command** and updates **Detached
+Command** to launch Bolt directly and record startup errors:
 
 ```text
-setsid env DISPLAY=:0 /usr/local/bin/bolt
+setsid env DISPLAY=:0 /usr/local/bin/bolt >> /home/gamer/.local/state/bolt-launcher.log 2>&1
 ```
 
-Keep global preparation commands enabled for resolution switching. Save, refresh
-Moonlight's applications, and test starting **Old School RuneScape**. Bolt inherits
+Global preparation commands are enabled by default for resolution switching. Bolt inherits
 the existing gamer session's runtime and audio environment. A detached application
 continues running after the stream ends; close RuneLite and Bolt from the desktop
 when finished.
 
-The equivalent app object is provided in `sunshine-config/osrs-app.json` for
-reference. It is deliberately not installed automatically before runtime
-validation. Existing persistent Sunshine app lists are not overwritten. If you
-later rebuild with `ENABLE_BOLT=false`, remove the app in the Sunshine Web UI;
-the persistent home remains intact.
+The app object is provided in `sunshine-config/osrs-app.json`. Registration does
+not prove Bolt can launch: complete the native validation above. If Moonlight
+shows only the desktop after selecting **Old School RuneScape**, read the log:
+
+```bash
+docker compose exec -u gamer sunshine-steam \
+  tail -n 100 /home/gamer/.local/state/bolt-launcher.log
+```
+
+If the log is missing, confirm the image was rebuilt with `ENABLE_BOLT=true`
+and the container recreated, then inspect the app's Detached Command in Sunshine.
+To see startup errors directly, use the foreground native-launch command above.
+Changing `.env` followed by `docker compose restart` does not rebuild the image.
+
+If you later rebuild with `ENABLE_BOLT=false`, remove the app in the Sunshine Web
+UI; the persistent home remains intact.
 
 ---
 

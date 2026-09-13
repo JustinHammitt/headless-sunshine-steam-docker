@@ -113,6 +113,9 @@ RUN curl -fL \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
+COPY --chmod=0644 sunshine-config/osrs-app.json /usr/local/share/headless-sunshine-steam/osrs-app.json
+COPY --chmod=0755 scripts/register-bolt-app /usr/local/bin/register-bolt-app
+COPY --chmod=0755 scripts/prepare-bolt-home /usr/local/bin/prepare-bolt-home
 
 # Only runtime libraries and Java for RuneLite enter the optional gaming image.
 RUN if [ "$ENABLE_BOLT" = true ]; then \
@@ -123,7 +126,7 @@ RUN if [ "$ENABLE_BOLT" = true ]; then \
             libcups2t64 libasound2t64 libgbm1 libdrm2 libxkbcommon0 \
             libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
             libglib2.0-0t64 libdbus-1-3 libx11-6 libxcb1 libxext6 \
-            libxshmfence1 fonts-dejavu-core openjdk-17-jre \
+            libxshmfence1 fonts-dejavu-core openjdk-17-jre python3 \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -470,6 +473,15 @@ if [[ ! -e "${SUNSHINE_DIR}/apps.json" ]]; then
         --mode=0644 \
         /usr/local/share/headless-sunshine-steam/apps.json \
         "${SUNSHINE_DIR}/apps.json"
+fi
+
+# Register Bolt before Sunshine reads its persistent app list. The installed
+# executable is the source of truth: ENABLE_BOLT is a build-time option.
+if [[ -x /usr/local/bin/bolt ]]; then
+    /usr/local/bin/prepare-bolt-home
+    /usr/local/bin/register-bolt-app \
+        "${SUNSHINE_DIR}/apps.json" \
+        /usr/local/share/headless-sunshine-steam/osrs-app.json
 fi
 
 touch "$SUNSHINE_CONF"
