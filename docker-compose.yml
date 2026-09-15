@@ -35,6 +35,8 @@ services:
     devices:
       - /dev/uinput:/dev/uinput
       - /dev/dri:/dev/dri
+      # Required for NVIDIA Vulkan presentation; create on the host before startup.
+      - /dev/nvidia-modeset:/dev/nvidia-modeset
 
     volumes:
       - /dev/input:/dev/input

@@ -105,6 +105,53 @@ This loads the module until the next reboot. To load it automatically on every b
 echo uinput | sudo tee /etc/modules-load.d/uinput.conf
 ```
 
+### 6. `/dev/nvidia-modeset`
+
+The Compose file explicitly exposes NVIDIA's modeset device for Vulkan
+presentation to the X11 desktop. It must exist on the host before the container
+is created. `NVIDIA_DRIVER_CAPABILITIES=all` alone did not expose this device in
+our tested V100 setup. Without it, OpenGL worked but native `vkcube` crashed,
+and the Rockstar launcher showed a blank window with Vulkan presentation errors.
+
+Initialize and verify it on the host:
+
+```bash
+sudo nvidia-modprobe -m
+ls -l /dev/nvidia-modeset
+```
+
+If the command is unavailable, install your distribution's `nvidia-modprobe`
+package. Do not load kernel modules from inside the container.
+
+For systemd hosts where the device is not already created automatically, the
+included service initializes it before Docker starts at boot. The unit expects
+`nvidia-modprobe` at `/usr/bin/nvidia-modprobe`; check `command -v nvidia-modprobe`
+and adjust `ExecStart` if your installation uses a different path.
+
+```bash
+sudo install -m 0644 systemd/nvidia-modeset-init.service /etc/systemd/system/nvidia-modeset-init.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nvidia-modeset-init.service
+```
+
+After adding the device mapping to an existing installation, close games and
+recreate the container (an image rebuild is not required for this mapping):
+
+```bash
+docker compose up -d --force-recreate sunshine-steam
+docker compose exec sunshine-steam ls -l /dev/nvidia-modeset
+```
+
+With Moonlight connected, test Vulkan presentation:
+
+```bash
+docker compose exec -u gamer -e DISPLAY=:0 -e XDG_RUNTIME_DIR=/run/user/1000 sunshine-steam timeout 15s vkcube
+```
+
+The rotating cube should render for 15 seconds; `timeout` normally returns exit
+code 124 when it closes the demo. A missing-device error during container
+creation means the host initialization above has not completed successfully.
+
 ---
 
 # Installation

@@ -1,0 +1,12 @@
+[Unit]
+Description=Initialize NVIDIA modeset device for graphics containers
+After=systemd-modules-load.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nvidia-modprobe -m
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
