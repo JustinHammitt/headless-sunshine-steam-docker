@@ -228,6 +228,32 @@ FUNCTION_DEC=$((16#$FUNCTION))
 
 XORG_BUS_ID="PCI:${BUS_DEC}:${SLOT_DEC}:${FUNCTION_DEC}"
 
+XORG_DISPLAY="${XORG_DISPLAY:-DP-0}"
+XORG_WIDTH="${XORG_WIDTH:-3840}"
+XORG_HEIGHT="${XORG_HEIGHT:-2160}"
+
+# These values enter Xorg configuration text. Accept one display identifier and
+# bounded decimal dimensions, not arbitrary configuration or modeline content.
+if [[ ! "$XORG_DISPLAY" =~ ^(DP|DVI-D|DVI-I|HDMI|DFP|CRT)-[0-9]+$ ]] \
+    || [[ ! "$XORG_WIDTH" =~ ^[1-9][0-9]{1,4}$ ]] \
+    || [[ ! "$XORG_HEIGHT" =~ ^[1-9][0-9]{1,4}$ ]]; then
+    echo 'Invalid XORG_DISPLAY, XORG_WIDTH or XORG_HEIGHT.' >&2
+    exit 1
+fi
+if (( XORG_WIDTH > 32768 || XORG_HEIGHT > 32768 )); then
+    echo 'Xorg startup dimensions must not exceed 32768.' >&2
+    exit 1
+fi
+
+# Preserve the original 4K timings unless an installation overrides the size.
+if [[ "$XORG_WIDTH" == 3840 && "$XORG_HEIGHT" == 2160 ]]; then
+    XORG_MODE=3840x2160_60
+    XORG_MODELINE='Modeline "3840x2160_60" 533.25 3840 3888 3920 4000 2160 2163 2168 2222 +HSync -VSync'
+else
+    XORG_MODELINE="$(cvt -r "$XORG_WIDTH" "$XORG_HEIGHT" 60 | grep '^Modeline')"
+    XORG_MODE="$(awk '{print $2}' <<< "$XORG_MODELINE" | tr -d '\"')"
+fi
+
 mkdir -p /etc/X11/xorg.conf.d
 
 cat > /etc/X11/xorg.conf.d/20-nvidia.conf <<XORG
@@ -241,7 +267,7 @@ Section "Monitor"
     HorizSync 30-160
     VertRefresh 30-120
 
-    Modeline "3840x2160_60" 533.25 3840 3888 3920 4000 2160 2163 2168 2222 +HSync -VSync
+    ${XORG_MODELINE}
 
     Option "Enable" "true"
 EndSection
@@ -253,13 +279,13 @@ Section "Device"
 
     Option "AllowEmptyInitialConfiguration" "True"
 
-    Option "ConnectedMonitor" "DP-0"
-    Option "UseDisplayDevice" "DP-0"
+    Option "ConnectedMonitor" "${XORG_DISPLAY}"
+    Option "UseDisplayDevice" "${XORG_DISPLAY}"
     Option "UseEDID" "False"
 
     Option "ModeValidation" "NoEdidModes,NoDFPNativeResolutionCheck,NoVirtualSizeCheck,NoMaxPClkCheck,NoHorizSyncCheck,NoVertRefreshCheck"
 
-    Option "MetaModes" "DP-0: 3840x2160_60 +0+0"
+    Option "MetaModes" "${XORG_DISPLAY}: ${XORG_MODE} +0+0"
 
     Option "Coolbits" "4"
 EndSection
@@ -272,13 +298,13 @@ Section "Screen"
 
     SubSection "Display"
         Depth 24
-        Modes "3840x2160_60"
-        Virtual 3840 2160
+        Modes "${XORG_MODE}"
+        Virtual ${XORG_WIDTH} ${XORG_HEIGHT}
     EndSubSection
 EndSection
 XORG
 
-echo "Configured Xorg on ${GPU_BDF} as ${XORG_BUS_ID}"
+echo "Configured Xorg on ${GPU_BDF} as ${XORG_BUS_ID}: ${XORG_DISPLAY} ${XORG_MODE}"
 EOF
 
 RUN chmod +x /usr/local/bin/generate-xorg-config
@@ -349,18 +375,17 @@ fi
 pactl set-default-sink headless
 
 # Derive the session configuration each start so persistent homes also receive
-# title bars, while keeping the user's original bindings, theme and rules.
+# title bars and the gaming menu, while keeping saved bindings, theme and rules.
 OPENBOX_SOURCE="${XDG_CONFIG_HOME:-$HOME/.config}/openbox/rc.xml"
 if [[ ! -f "$OPENBOX_SOURCE" ]]; then
     OPENBOX_SOURCE=/etc/xdg/openbox/rc.xml
 fi
 OPENBOX_CONFIG="$XDG_RUNTIME_DIR/openbox-rc.xml"
-if /usr/local/bin/prepare-openbox-config "$OPENBOX_SOURCE" "$OPENBOX_CONFIG"; then
-    openbox --config-file "$OPENBOX_CONFIG" &
-else
-    echo 'Unable to prepare Openbox title bars; using the existing configuration.' >&2
-    openbox &
+if ! /usr/local/bin/prepare-openbox-config "$OPENBOX_SOURCE" "$OPENBOX_CONFIG"; then
+    echo 'Unable to read saved Openbox settings; applying the gaming menu to the default configuration.' >&2
+    /usr/local/bin/prepare-openbox-config /etc/xdg/openbox/rc.xml "$OPENBOX_CONFIG"
 fi
+openbox --config-file "$OPENBOX_CONFIG" &
 PIDS+=("$!")
 
 picom --backend glx &

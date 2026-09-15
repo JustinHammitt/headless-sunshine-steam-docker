@@ -139,6 +139,25 @@ Replace `192.168.1.100` with the IP address of your Docker host.
 
 Set `NVIDIA_GPU_ID` to the GPU index reported by `nvidia-smi`; this is normally `0` on a single-GPU server.
 
+If Xorg rejects the default `DP-0` / 3840×2160 startup mode, set a supported display
+identifier and size in `.env`. For example, an installation whose NVIDIA Xorg
+log lists `DFP-0` and supports 1080p can use:
+
+```dotenv
+XORG_DISPLAY=DFP-0
+XORG_WIDTH=1920
+XORG_HEIGHT=1080
+```
+
+These optional values configure the initial Xorg display at 60 Hz. Other sizes
+use CVT reduced-blanking timings. Leaving them unset retains the original display
+and 4K modeline. Moonlight resolution switching still detects the active RandR
+output (which may have a different name, such as `DVI-D-0`) and requests the
+client's stream resolution. The driver must support the selected modes.
+Recreate the container after changing these values; when first installing this
+feature, rebuild it as well. Correcting a rejected startup mode does not by itself
+establish or fix the cause of Vulkan presentation errors.
+
 You can find the host IP with, for example:
 
 ```bash
@@ -419,6 +438,24 @@ the existing gamer session's runtime and audio environment. A detached applicati
 continues running after the stream ends; close RuneLite and Bolt from the desktop
 when finished.
 
+## Reopen apps from the desktop
+
+Right-click an empty area of the streamed desktop to open the gaming menu:
+
+- **Steam Desktop** opens the Steam library.
+- **Steam Big Picture** opens Steam's gamepad interface.
+- **Bolt Launcher** appears when Bolt is installed (`ENABLE_BOLT=true`).
+- **Windows** lists open windows, including minimized clients you can restore.
+- **Reload Openbox Configuration** reloads the desktop configuration.
+
+The menu has no **Exit** action. Closing Steam or Bolt leaves the desktop menu
+available to launch them again. Launchers run as the existing gamer session user.
+
+At session startup, `/run/user/1000/openbox-menu.xml` is generated and selected
+in the session's Openbox configuration. It replaces the distro or saved menu for
+that session; saved menu files remain untouched. Rebuild and recreate the
+container after updating to receive this menu in an existing installation.
+
 ## Arrange multiple game clients
 
 The streamed desktop runs Openbox and explicitly enables its title bars and
@@ -436,7 +473,8 @@ docker compose up -d --build sunshine-steam
 Each session derives `/run/user/1000/openbox-rc.xml` from the saved
 `/home/gamer/.config/openbox/rc.xml`, or the image's default configuration when
 there is no saved file. It adds a final rule enabling decorations for normal
-windows. Your saved file is not modified; other settings and bindings are kept.
+windows and selects the gaming menu. Your saved file is not modified; other
+settings and bindings are kept.
 Applications with their own title bars may display both their own bar and the
 Openbox bar.
 
@@ -466,8 +504,8 @@ docker compose exec -u gamer sunshine-steam pgrep -a openbox
 A saved `/home/gamer/.config/openbox/rc.xml` (host path
 `./data/.config/openbox/rc.xml`) can override the default shortcuts. Check that
 file and the container logs if window controls are missing. If configuration
-generation fails, startup logs the error and launches Openbox with its existing
-configuration.
+generation fails for a saved configuration, startup logs the error and applies
+the gaming menu and title-bar rule to the image's default configuration instead.
 
 ## Troubleshoot the Bolt application
 
