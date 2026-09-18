@@ -4,8 +4,9 @@ FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Pin Sunshine for reproducible builds.
+# Pin Sunshine and Heroic for reproducible builds.
 ARG SUNSHINE_VERSION=v2026.516.143833
+ARG HEROIC_VERSION=v2.22.3
 
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 
@@ -79,7 +80,31 @@ RUN curl -fL \
     && rm -f /tmp/sunshine.deb \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Heroic Games Launcher (Epic/GOG/Amazon) from its official .deb.
+# The .deb installs the Electron app under /opt/Heroic with a
+# /usr/share/applications/heroic.desktop entry (Exec=/opt/Heroic/heroic).
+RUN curl -fL \
+        "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/Heroic-${HEROIC_VERSION#v}-linux-amd64.deb" \
+        -o /tmp/heroic.deb \
+    && apt-get update \
+    && apt-get install -y /tmp/heroic.deb \
+    && rm -f /tmp/heroic.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Expose Heroic on PATH (mirrors the steam symlink above) so Sunshine's
+# detached commands can invoke it, and seed Sunshine's assets with the
+# Heroic cover art so "image-path": "heroic.png" resolves to a real icon.
+RUN ln -sf /opt/Heroic/heroic /usr/local/bin/heroic \
+    && for size in 512x512 256x256 128x128 64x64; do \
+        if [ -f "/usr/share/icons/hicolor/${size}/apps/heroic.png" ]; then \
+            cp "/usr/share/icons/hicolor/${size}/apps/heroic.png" /usr/share/sunshine/heroic.png; \
+            break; \
+        fi; \
+    done \
+    && test -f /usr/share/sunshine/heroic.png
+
 COPY --chmod=0644 sunshine-config/apps.json /usr/local/share/headless-sunshine-steam/apps.json
+COPY --chmod=0644 heroic-config.json /usr/local/share/headless-sunshine-steam/heroic-config.json
 
 # Create the user that owns the persistent home directory.
 RUN set -eux; \
@@ -239,12 +264,55 @@ RUN cat > /usr/local/bin/sunshine-resolution-undo <<'EOF'
 
 export DISPLAY=:0
 
-steam -shutdown >/dev/null 2>&1 || true
+# Sunshine runs this undo command synchronously on every app quit and waits
+# for it without a timeout, so it must never block. Only ask Steam to shut
+# down when a client is actually running: invoking `steam -shutdown` with no
+# client active launches Steam (including slow update downloads), which hangs
+# Moonlight's quit request until the container is restarted.
+if pgrep -x steam >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=5s 15s steam -shutdown >/dev/null 2>&1 || true
+fi
 
 xrandr --output DP-0 --mode 3840x2160 --rate 60
 EOF
 
 RUN chmod +x /usr/local/bin/sunshine-resolution-undo
+
+# Tracked launcher for the Heroic Games Launcher.
+#
+# Sunshine runs this as the app's main command inside its own process group,
+# so Moonlight Quit (SIGTERM to the group, SIGKILL after exit-timeout) always
+# reaches Heroic. Do NOT use setsid here: detaching would move Heroic into a
+# new session outside Sunshine's process group, leaving it running after quit
+# and wedging the session. Extra args (e.g. --console) pass through to Heroic.
+RUN cat > /usr/local/bin/launch-heroic <<'EOF'
+#!/bin/bash
+set -uo pipefail
+
+export DISPLAY="${DISPLAY:-:0}"
+
+HEROIC_PID=""
+
+stop_heroic() {
+    if [[ -n "$HEROIC_PID" ]] && kill -0 "$HEROIC_PID" 2>/dev/null; then
+        kill -TERM "$HEROIC_PID" 2>/dev/null || true
+    fi
+}
+
+trap stop_heroic TERM INT
+
+/opt/Heroic/heroic "$@" &
+HEROIC_PID=$!
+
+# A trapped signal interrupts wait, so loop until Heroic is actually gone.
+while kill -0 "$HEROIC_PID" 2>/dev/null; do
+    wait "$HEROIC_PID" 2>/dev/null || true
+done
+
+exit 0
+EOF
+
+RUN chmod +x /usr/local/bin/launch-heroic
 
 # Start the graphical and audio session.
 RUN cat > /usr/local/bin/gaming-session <<'EOF'
@@ -347,6 +415,70 @@ done
 mkdir -p "$GAMER_HOME"
 chown "$GAMER_USER:$GAMER_USER" "$GAMER_HOME"
 chown "$GAMER_USER:$GAMER_USER" /games
+
+# Seed the standard XDG directories and ensure they belong to the gamer
+# user. A fresh persistent home can otherwise leave e.g. ~/.config owned by
+# root (created while installing Sunshine's managed files), which makes GUI
+# apps launched as gamer fail at startup because they cannot create their
+# own config subdirectories.
+# Only the top-level directories are chowned, never their contents.
+mkdir -p \
+    "$GAMER_HOME/.config" \
+    "$GAMER_HOME/.local/share" \
+    "$GAMER_HOME/.local/state" \
+    "$GAMER_HOME/.cache"
+chown "$GAMER_USER:$GAMER_USER" \
+    "$GAMER_HOME/.config" \
+    "$GAMER_HOME/.local" \
+    "$GAMER_HOME/.local/share" \
+    "$GAMER_HOME/.local/state" \
+    "$GAMER_HOME/.cache"
+
+# The shared /games mount holds every game library in one place:
+# /games/SteamLibrary for Steam and /games/Heroic for Heroic
+# (Epic/GOG/Amazon installs and Wine prefixes).
+mkdir -p /games/SteamLibrary /games/Heroic
+chown "$GAMER_USER:$GAMER_USER" /games/SteamLibrary /games/Heroic
+
+# Migrate Heroic data out of the Steam library for setups created before
+# /games became the shared parent (back then /games was the Steam library
+# itself, so Heroic lived at /games/Heroic == <old-library>/Heroic). Only
+# moves when the new location is still empty, so existing data is never
+# merged over or deleted; same-filesystem rename, nothing is copied.
+LEGACY_HEROIC=/games/SteamLibrary/Heroic
+
+if [[ -d "$LEGACY_HEROIC" ]] \
+    && [[ -z "$(ls -A /games/Heroic)" ]] \
+    && [[ -n "$(ls -A "$LEGACY_HEROIC")" ]]; then
+    echo "Migrating legacy Heroic library $LEGACY_HEROIC to /games/Heroic..."
+    mv "$LEGACY_HEROIC"/* "$LEGACY_HEROIC"/.* /games/Heroic/ 2>/dev/null || true
+    rmdir --ignore-fail-on-non-empty "$LEGACY_HEROIC" 2>/dev/null || true
+fi
+
+# Seed Heroic's default install/prefix locations without ever touching
+# existing user settings (Heroic merges these factory-style defaults under
+# stored values on launch).
+HEROIC_CONF_DIR="$GAMER_HOME/.config/heroic"
+HEROIC_CONF="$HEROIC_CONF_DIR/config.json"
+
+install -d \
+    --owner="$GAMER_USER" \
+    --group="$GAMER_USER" \
+    "$HEROIC_CONF_DIR"
+
+if [[ ! -e "$HEROIC_CONF" ]]; then
+    install \
+        --owner="$GAMER_USER" \
+        --group="$GAMER_USER" \
+        --mode=0644 \
+        /usr/local/share/headless-sunshine-steam/heroic-config.json \
+        "$HEROIC_CONF"
+fi
+
+# Clean up the legacy ~/Games/Heroic seed from earlier images, but only when
+# empty so existing game data is never touched.
+rmdir --ignore-fail-on-non-empty "$GAMER_HOME/Games/Heroic" 2>/dev/null || true
+rmdir --ignore-fail-on-non-empty "$GAMER_HOME/Games" 2>/dev/null || true
 
 install -d \
     --owner="$GAMER_USER" \

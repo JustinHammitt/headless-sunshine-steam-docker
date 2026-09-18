@@ -4,6 +4,7 @@ A Dockerized, headless Linux Sunshine and Steam host built around:
 
 - [Sunshine](https://github.com/LizardByte/Sunshine) — hosts and streams the desktop and games
 - [Steam](https://store.steampowered.com/about/) — installs, manages and launches games
+- [Heroic](https://heroicgameslauncher.com/) — installs, manages and launches Epic, GOG and Amazon games
 - [Moonlight](https://moonlight-stream.org/) — connects clients to the Sunshine host
 - NVIDIA NVENC + NvFBC — provides hardware encoding and display capture
 - Headless Xorg — creates the virtual display without a physical monitor
@@ -17,7 +18,7 @@ The goal is to turn a Linux server with an NVIDIA GPU into a console-like Sunshi
 docker compose up -d --build
 ```
 
-Steam is installed and updated automatically. Sunshine starts with a fresh default configuration, and all persistent data is stored under `./data`.
+Steam and Heroic are installed automatically (Steam is also bootstrapped/updated on first start). Sunshine starts with a fresh default configuration, and all persistent data is stored under `./data`.
 
 ---
 
@@ -27,6 +28,7 @@ Steam is installed and updated automatically. Sunshine starts with a fresh defau
 - NVIDIA NvFBC capture
 - NVIDIA NVENC hardware encoding
 - Steam Big Picture / Gamepad UI
+- Heroic Desktop and Heroic Console Mode (controller-friendly UI)
 - Automatic Steam bootstrap and client updates
 - Persistent Steam login, settings and Proton state
 - Persistent Sunshine configuration and pairing state
@@ -129,6 +131,7 @@ Example:
 ```dotenv
 SUNSHINE_CORS_ORIGIN=https://192.168.1.100:47990
 NVIDIA_GPU_ID=0
+GAMES_DIR=./data/games
 ```
 
 Replace `192.168.1.100` with the IP address of your Docker host.
@@ -145,16 +148,17 @@ Use a stable/static LAN address if possible.
 
 ---
 
-Persistent storage requires no configuration. The default Compose file stores the fresh Sunshine and Steam state in `./data` and the game library in `./data/games/SteamLibrary`.
+Persistent storage requires no configuration. The default Compose file stores the fresh Sunshine and Steam state in `./data` and all game libraries under `./data/games` (`SteamLibrary/` for Steam, `Heroic/` for Heroic).
 
-### Optional: Use an existing Steam library
+### Optional: Use an existing games directory
 
-To reuse an existing library, change only the host path of the `/games` mount in `docker-compose.yml`:
+To reuse existing libraries, set `GAMES_DIR` in `.env` to the folder that contains your `SteamLibrary` directory:
 
-```yaml
-volumes:
-  - /path/to/SteamLibrary:/games
+```dotenv
+GAMES_DIR=/path/to/games
 ```
+
+The container sees it as `/games`, so Steam finds its library at `/games/SteamLibrary` and Heroic installs to `/games/Heroic`.
 
 ---
 
@@ -244,7 +248,7 @@ In the Sunshine Web UI:
 
 Moonlight should now show the applications published by Sunshine.
 
-Select **Steam Big Picture** or **Steam Desktop**.
+Select **Steam Big Picture**, **Steam Desktop**, **Heroic Desktop** or **Heroic Console Mode**.
 
 ---
 
@@ -261,10 +265,10 @@ The container automatically changes the virtual Xorg desktop to the client-reque
 The game library is mounted in the container at:
 
 ```text
-/games
+/games/SteamLibrary
 ```
 
-Add `/games` as a Steam library.
+Add `/games/SteamLibrary` as a Steam library.
 
 Normally this can be done from:
 
@@ -284,10 +288,22 @@ docker compose exec -u gamer sunshine-steam \
 Then run in the Steam Console:
 
 ```text
-library_folder_add /games
+library_folder_add /games/SteamLibrary
 ```
 
 After that, Steam should see the mounted library normally.
+
+## Game library layout
+
+All game data lives under the single shared mount:
+
+```text
+/games
+  SteamLibrary/   # Steam library (add /games/SteamLibrary as a Steam library, see above)
+  Heroic/         # Heroic (Epic/GOG/Amazon) default install and Wine prefixes
+```
+
+Heroic is preconfigured to install games to `/games/Heroic`. You can change this in Heroic under Settings, but keeping everything under `/games` keeps the host games directory (`./data/games` by default, or wherever `GAMES_DIR` points) as the one place for all games.
 
 ---
 

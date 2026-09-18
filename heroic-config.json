@@ -1,0 +1,9 @@
+{
+    "defaultSettings": {
+        "defaultInstallPath": "/games/Heroic",
+        "defaultWinePrefix": "/games/Heroic/Prefixes",
+        "defaultWinePrefixDir": "/games/Heroic/Prefixes",
+        "winePrefix": "/games/Heroic/Prefixes/shared"
+    },
+    "version": "v0"
+}
