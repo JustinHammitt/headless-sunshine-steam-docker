@@ -253,39 +253,6 @@ The container automatically changes the virtual Xorg desktop to the client-reque
 
 ---
 
-## Steam library
-
-The game library is mounted in the container at:
-
-```text
-/games/SteamLibrary
-```
-
-On every boot the container registers that folder in Steam's library list (`libraryfolders.vdf`), so there is nothing to import manually — Steam sees `/games/SteamLibrary` as a library from the first launch. Existing Steam states are preserved: the folder is only added if it is not registered yet, and any Steam-managed file with an unrecognized structure is left untouched.
-
-If for any reason Steam does not show the library, you can add it from:
-
-```text
-Steam -> Settings -> Storage
-```
-
-If Steam's Linux Storage UI does not respond to the **Add Drive** button, use the Steam console.
-
-Open the Steam console inside the running graphical session:
-
-```bash
-docker compose exec -u gamer sunshine-steam \
-  bash -lc 'DISPLAY=:0 steam steam://open/console'
-```
-
-Then run in the Steam Console:
-
-```text
-library_folder_add /games/SteamLibrary
-```
-
----
-
 # Networking
 
 The supplied Compose configuration uses host networking so Sunshine discovery and streaming traffic work naturally on the LAN.
