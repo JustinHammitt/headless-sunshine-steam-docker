@@ -131,6 +131,7 @@ Example:
 ```dotenv
 SUNSHINE_CORS_ORIGIN=https://192.168.1.100:47990
 NVIDIA_GPU_ID=0
+# Optional: host directory for the game libraries (default: ./data/games)
 GAMES_DIR=./data/games
 ```
 
@@ -148,17 +149,9 @@ Use a stable/static LAN address if possible.
 
 ---
 
-Persistent storage requires no configuration. The default Compose file stores the fresh Sunshine and Steam state in `./data` and all game libraries under `./data/games` (`SteamLibrary/` for Steam, `Heroic/` for Heroic).
+Persistent storage requires no configuration. The default Compose file stores the fresh Sunshine and Steam state in `./data` and all game libraries under `./data/games`.
 
-### Optional: Use an existing games directory
-
-To reuse existing libraries, set `GAMES_DIR` in `.env` to the folder that contains your `SteamLibrary` directory:
-
-```dotenv
-GAMES_DIR=/path/to/games
-```
-
-The container sees it as `/games`, so Steam finds its library at `/games/SteamLibrary` and Heroic installs to `/games/Heroic`.
+If you want the game libraries to live in a different host directory, set `GAMES_DIR` in `.env`; otherwise the default is used.
 
 ---
 
@@ -260,7 +253,7 @@ The container automatically changes the virtual Xorg desktop to the client-reque
 
 ---
 
-## Add the game library to Steam
+## Steam library
 
 The game library is mounted in the container at:
 
@@ -268,9 +261,9 @@ The game library is mounted in the container at:
 /games/SteamLibrary
 ```
 
-Add `/games/SteamLibrary` as a Steam library.
+On every boot the container registers that folder in Steam's library list (`libraryfolders.vdf`), so there is nothing to import manually — Steam sees `/games/SteamLibrary` as a library from the first launch. Existing Steam states are preserved: the folder is only added if it is not registered yet, and any Steam-managed file with an unrecognized structure is left untouched.
 
-Normally this can be done from:
+If for any reason Steam does not show the library, you can add it from:
 
 ```text
 Steam -> Settings -> Storage
@@ -290,20 +283,6 @@ Then run in the Steam Console:
 ```text
 library_folder_add /games/SteamLibrary
 ```
-
-After that, Steam should see the mounted library normally.
-
-## Game library layout
-
-All game data lives under the single shared mount:
-
-```text
-/games
-  SteamLibrary/   # Steam library (add /games/SteamLibrary as a Steam library, see above)
-  Heroic/         # Heroic (Epic/GOG/Amazon) default install and Wine prefixes
-```
-
-Heroic is preconfigured to install games to `/games/Heroic`. You can change this in Heroic under Settings, but keeping everything under `/games` keeps the host games directory (`./data/games` by default, or wherever `GAMES_DIR` points) as the one place for all games.
 
 ---
 

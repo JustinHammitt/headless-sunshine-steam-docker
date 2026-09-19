@@ -314,6 +314,18 @@ EOF
 
 RUN chmod +x /usr/local/bin/launch-heroic
 
+# Register the shared Steam library (/games/SteamLibrary) in the Steam
+# client's libraryfolders.vdf, so users do not have to import it manually
+# from Steam settings. The current client keeps that file at
+# ~/.steam/debian-installation/config/libraryfolders.vdf.
+#
+# Safety rules:
+#   * Idempotent - an existing registration leaves the file untouched.
+#   * A file with an unrecognized structure is left untouched.
+#   * Only meant to run at boot, while no Steam process is running.
+COPY --chmod=0755 scripts/steam-register-library.py /usr/local/bin/steam-register-library
+
+
 # Start the graphical and audio session.
 RUN cat > /usr/local/bin/gaming-session <<'EOF'
 #!/bin/bash
@@ -673,6 +685,11 @@ for _ in $(seq 1 10); do
 done
 
 pkill -KILL -u "$GAMER_UID" -x steam 2>/dev/null || true
+
+# Register the shared Steam library (/games/SteamLibrary) in the client's
+# libraryfolders.vdf. Safe here: no Steam process is running, the operation
+# is idempotent, and an unrecognized file is left untouched.
+/usr/local/bin/steam-register-library
 
 su - "$GAMER_USER" -c \
     'exec dbus-run-session -- /usr/local/bin/gaming-session' &
