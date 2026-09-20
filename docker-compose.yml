@@ -7,8 +7,6 @@ services:
     image: headless-sunshine-steam:local
     container_name: headless-sunshine-steam
     restart: unless-stopped
-
-    # Host networking allows Moonlight discovery and Sunshine traffic.
     network_mode: host
 
     ipc: host
@@ -42,7 +40,7 @@ services:
       - /dev/input:/dev/input
       - /run/udev:/run/udev:ro
       - ./data:/home/gamer
-      - ./data/games/SteamLibrary:/games
+      - "${GAMES_DIR:-./data/games}:/games"
 
     device_cgroup_rules:
       - "c 13:* rwm"
@@ -54,3 +52,4 @@ services:
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+
