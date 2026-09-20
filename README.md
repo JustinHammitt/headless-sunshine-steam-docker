@@ -6,6 +6,7 @@ A Dockerized, headless Linux Sunshine and Steam host built around:
 - [Steam](https://store.steampowered.com/about/) — installs, manages and launches games
 - [Heroic](https://heroicgameslauncher.com/) — installs, manages and launches Epic, GOG and Amazon games
 - [Moonlight](https://moonlight-stream.org/) — connects clients to the Sunshine host
+- [Bolt + OSRS](https://codeberg.org/Adamcake/Bolt) - Launcher responsible for OSRS Official and RuneLite Client launching
 - NVIDIA NVENC + NvFBC — provides hardware encoding and display capture
 - Headless Xorg — creates the virtual display without a physical monitor
 - Openbox — provides a lightweight window manager
