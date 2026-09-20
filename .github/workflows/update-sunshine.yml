@@ -16,7 +16,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
         with:
@@ -32,9 +32,11 @@ jobs:
         run: python3 scripts/update-sunshine.py
 
       # Validate here: PRs created with GITHUB_TOKEN do not trigger PR workflows.
-      - name: Build updated image
+      - name: Build updated image with and without Bolt
         if: steps.sunshine.outputs.changed == 'true'
-        run: docker build --build-arg ENABLE_BOLT=false --tag sunshine-update:check .
+        run: |
+          docker build --build-arg ENABLE_BOLT=false --tag sunshine-update:check .
+          docker build --build-arg ENABLE_BOLT=true --tag sunshine-update:bolt-check .
 
       - name: Open or update pull request
         uses: peter-evans/create-pull-request@v8
@@ -49,6 +51,6 @@ jobs:
 
             Release notes: https://github.com/LizardByte/Sunshine/releases/tag/${{ steps.sunshine.outputs.version }}
 
-            Validated that the Ubuntu 24.04 amd64 package exists and the default Docker image builds.
+            Validated that the Ubuntu 24.04 amd64 package exists and images build with ENABLE_BOLT=false and ENABLE_BOLT=true.
             After merging, rebuild and recreate the container on the host with:
             `docker compose up -d --build sunshine-steam`

@@ -262,8 +262,8 @@ to `docker compose build`.
 
 The **Update Sunshine** GitHub Action checks the latest stable upstream release
 daily at 10:23 UTC and can also be run from the Actions tab. It verifies that the
-Ubuntu 24.04 amd64 package exists, updates `SUNSHINE_VERSION`, builds the default
-image, and opens or updates a single pull request. Prereleases are excluded;
+Ubuntu 24.04 amd64 package exists, updates `SUNSHINE_VERSION`, builds images with
+`ENABLE_BOLT=false` and `ENABLE_BOLT=true`, and opens or updates a single pull request. Prereleases are excluded;
 missing packages and build failures fail the run instead of proposing an update.
 
 To enable it, push the workflow to the repository's default branch and enable
@@ -436,8 +436,8 @@ docker compose build sunshine-steam
 docker compose up -d sunshine-steam
 ```
 
-The `bolt-builder` stage compiles [Bolt 0.24.0 from Codeberg](https://codeberg.org/Adamcake/Bolt/src/tag/0.24.0)
-at commit `d8589d80f9849e51f121646e31daa5be7038da28`, including its pinned
+The `bolt-builder` stage compiles [Bolt from Codeberg](https://codeberg.org/Adamcake/Bolt)
+at the `BOLT_VERSION` and `BOLT_COMMIT` pinned in the Dockerfile, including its pinned
 submodules. It uses the committed `app/dist` frontend and builds the CEF C++
 wrapper from [Adamcake's native Linux CEF distribution](https://adamcake.com/cef).
 The archive is `cef-139.0.7258.139-linux-x86_64-minimal-ungoogled.tar.xz`,
@@ -461,6 +461,19 @@ Bolt and CEF source pins are recorded in `/opt/bolt-launcher/build-info.txt`.
 Changing the CEF version also requires updating its checksum and rebuilding Bolt;
 do not replace `libcef.so` independently. These pins do not freeze Ubuntu package
 repositories or RuneLite's downloaded client updates.
+
+The **Update Bolt** GitHub Action checks stable Codeberg releases daily at
+10:43 UTC (or manually from Actions), updates both Bolt pins, and builds with
+`ENABLE_BOLT=true` before opening or updating a pull request. It uses the same
+GitHub PR permission setting as the Sunshine updater. The workflow explicitly
+sets `ENABLE_BOLT=true` because GitHub cannot read your host's `.env`; Docker and
+Compose still install Bolt only when you enable that build flag.
+
+The updater leaves the CEF version and checksum pinned. If a new Bolt release
+requires a newer CEF bundle, the build must pass after those pins are reviewed
+and updated manually. Builds do not replace the launcher checks below.
+For a local check, run `ENABLE_BOLT=true python3 scripts/update-bolt.py`.
+With the flag unset or false, the updater skips Bolt without contacting Codeberg.
 
 ## Validate the native launcher first
 
