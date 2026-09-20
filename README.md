@@ -124,7 +124,8 @@ If the command is unavailable, install your distribution's `nvidia-modprobe`
 package. Do not load kernel modules from inside the container.
 
 For systemd hosts where the device is not already created automatically, the
-included service initializes it before Docker starts at boot. The unit expects
+included service initializes the NVIDIA, UVM, and modeset device nodes before
+Docker starts at boot. The unit expects
 `nvidia-modprobe` at `/usr/bin/nvidia-modprobe`; check `command -v nvidia-modprobe`
 and adjust `ExecStart` if your installation uses a different path.
 
@@ -132,6 +133,15 @@ and adjust `ExecStart` if your installation uses a different path.
 sudo install -m 0644 systemd/nvidia-modeset-init.service /etc/systemd/system/nvidia-modeset-init.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now nvidia-modeset-init.service
+```
+
+If updating an already-enabled service, repeat the install and daemon-reload
+commands, then run `sudo systemctl restart nvidia-modeset-init.service` to apply
+the updated commands immediately. Verify with:
+
+```bash
+systemctl status nvidia-modeset-init.service
+ls -l /dev/nvidia-modeset
 ```
 
 After adding the device mapping to an existing installation, close games and
@@ -247,6 +257,33 @@ The Dockerfile pins Sunshine with `SUNSHINE_VERSION`. Its Ubuntu package filenam
 is derived from that version. When choosing a release with a different package
 naming convention, also pass `--build-arg SUNSHINE_DEB_NAME=<release-asset-name>`
 to `docker compose build`.
+
+## Updating Sunshine
+
+The **Update Sunshine** GitHub Action checks the latest stable upstream release
+daily at 10:23 UTC and can also be run from the Actions tab. It verifies that the
+Ubuntu 24.04 amd64 package exists, updates `SUNSHINE_VERSION`, builds the default
+image, and opens or updates a single pull request. Prereleases are excluded;
+missing packages and build failures fail the run instead of proposing an update.
+
+To enable it, push the workflow to the repository's default branch and enable
+**Allow GitHub Actions to create and approve pull requests** under
+**Settings > Actions > General > Workflow permissions**. Forks may also need
+scheduled workflows enabled in the Actions tab. The workflow uses the built-in
+`GITHUB_TOKEN`; no personal access token is required.
+
+After merging an update, pull the changes on the Sunshine host, close any running
+games, and rebuild and recreate the container:
+
+```bash
+git pull --ff-only
+docker compose up -d --build sunshine-steam
+docker compose exec sunshine-steam sunshine --version
+```
+
+This briefly interrupts streaming. Sunshine settings, pairing state, and games
+remain in the persistent `./data` directory. The action does not deploy to the
+host. To update the pin locally, run `python3 scripts/update-sunshine.py`.
 
 ---
 
@@ -619,6 +656,47 @@ Do not blindly expose these ports through your Internet router.
 ---
 
 # Logs and diagnostics
+
+## Container fails after reboot: missing `/dev/nvidia-modeset`
+
+If Docker fails to start the container with:
+
+```text
+error gathering device information while adding custom device "/dev/nvidia-modeset": no such file or directory
+```
+
+Check the NVIDIA driver and device node on the **host**:
+
+```bash
+nvidia-smi
+lsmod | grep nvidia
+ls -l /dev/nvidia-modeset
+```
+
+On headless NVIDIA hosts, the `nvidia_modeset` kernel module may be loaded while
+the corresponding device node has not yet been created. This was observed after
+a reboot on Debian 13 with Tesla V100 GPUs, even though `nvidia-smi` worked and
+the other NVIDIA modules and device nodes were present.
+
+If the driver is otherwise healthy and the modeset module is loaded but
+`/dev/nvidia-modeset` is missing, create it and retry startup:
+
+```bash
+sudo nvidia-modprobe -m
+ls -l /dev/nvidia-modeset
+docker compose up -d sunshine-steam
+```
+
+For subsequent reboots, install and enable the
+[host initialization service](#6-devnvidia-modeset) described in the prerequisites.
+If it is already installed, inspect its boot log with
+`sudo journalctl -b -u nvidia-modeset-init.service`.
+
+Keep the `/dev/nvidia-modeset` mapping in Compose: `/dev/nvidia0` serves a
+different purpose and is not a replacement. The node must exist before Docker
+starts the container; a check inside the container would run too late.
+
+## Container diagnostics
 
 Follow all container output:
 

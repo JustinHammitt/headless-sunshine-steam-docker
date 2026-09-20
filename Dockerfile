@@ -49,7 +49,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG ENABLE_BOLT
 
 # Pin Sunshine for reproducible builds.
-ARG SUNSHINE_VERSION=v2026.906.222525
+ARG SUNSHINE_VERSION=v2026.914.233613
 # Optional override for releases using a different package naming convention.
 ARG SUNSHINE_DEB_NAME
 
