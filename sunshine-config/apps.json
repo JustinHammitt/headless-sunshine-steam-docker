@@ -50,6 +50,40 @@
                 }
             ],
             "wait-all": true
+        },
+        {
+            "auto-detach": false,
+            "cmd": "/usr/local/bin/launch-heroic",
+            "elevated": false,
+            "exclude-global-prep-cmd": false,
+            "exit-timeout": 5,
+            "image-path": "heroic.png",
+            "name": "Heroic Desktop",
+            "output": "",
+            "prep-cmd": [
+                {
+                    "do": "",
+                    "undo": ""
+                }
+            ],
+            "wait-all": true
+        },
+        {
+            "auto-detach": false,
+            "cmd": "/usr/local/bin/launch-heroic --console",
+            "elevated": false,
+            "exclude-global-prep-cmd": false,
+            "exit-timeout": 5,
+            "image-path": "heroic.png",
+            "name": "Heroic Console Mode",
+            "output": "",
+            "prep-cmd": [
+                {
+                    "do": "",
+                    "undo": ""
+                }
+            ],
+            "wait-all": true
         }
     ],
     "env": {

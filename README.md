@@ -4,7 +4,9 @@ A Dockerized, headless Linux Sunshine and Steam host built around:
 
 - [Sunshine](https://github.com/LizardByte/Sunshine) — hosts and streams the desktop and games
 - [Steam](https://store.steampowered.com/about/) — installs, manages and launches games
+- [Heroic](https://heroicgameslauncher.com/) — installs, manages and launches Epic, GOG and Amazon games
 - [Moonlight](https://moonlight-stream.org/) — connects clients to the Sunshine host
+- [Bolt + OSRS](https://codeberg.org/Adamcake/Bolt) - Launcher responsible for OSRS Official and RuneLite Client launching
 - NVIDIA NVENC + NvFBC — provides hardware encoding and display capture
 - Headless Xorg — creates the virtual display without a physical monitor
 - Openbox — provides a lightweight window manager
@@ -17,7 +19,7 @@ The goal is to turn a Linux server with an NVIDIA GPU into a console-like Sunshi
 docker compose up -d --build
 ```
 
-Steam is installed and updated automatically. Sunshine starts with a fresh default configuration, and all persistent data is stored under `./data`.
+Steam and Heroic are installed automatically (Steam is also bootstrapped/updated on first start). Sunshine starts with a fresh default configuration, and all persistent data is stored under `./data`.
 
 ---
 
@@ -27,6 +29,7 @@ Steam is installed and updated automatically. Sunshine starts with a fresh defau
 - NVIDIA NvFBC capture
 - NVIDIA NVENC hardware encoding
 - Steam Big Picture / Gamepad UI
+- Heroic Desktop and Heroic Console Mode (controller-friendly UI)
 - Automatic Steam bootstrap and client updates
 - Persistent Steam login, settings and Proton state
 - Persistent Sunshine configuration and pairing state
@@ -190,6 +193,8 @@ Example:
 ```dotenv
 SUNSHINE_CORS_ORIGIN=https://192.168.1.100:47990
 NVIDIA_GPU_ID=0
+# Optional: host directory for the game libraries (default: ./data/games)
+GAMES_DIR=./data/games
 ```
 
 Replace `192.168.1.100` with the IP address of your Docker host.
@@ -225,16 +230,9 @@ Use a stable/static LAN address if possible.
 
 ---
 
-Persistent storage requires no configuration. The default Compose file stores the fresh Sunshine and Steam state in `./data` and the game library in `./data/games/SteamLibrary`.
+Persistent storage requires no configuration. The default Compose file stores the fresh Sunshine and Steam state in `./data` and all game libraries under `./data/games`.
 
-### Optional: Use an existing Steam library
-
-To reuse an existing library, change only the host path of the `/games` mount in `docker-compose.yml`:
-
-```yaml
-volumes:
-  - /path/to/SteamLibrary:/games
-```
+If you want the game libraries to live in a different host directory, set `GAMES_DIR` in `.env`; otherwise the default is used.
 
 ---
 
@@ -356,7 +354,7 @@ In the Sunshine Web UI:
 
 Moonlight should now show the applications published by Sunshine.
 
-Select **Steam Big Picture** or **Steam Desktop**.
+Select **Steam Big Picture**, **Steam Desktop**, **Heroic Desktop** or **Heroic Console Mode**.
 
 ---
 
