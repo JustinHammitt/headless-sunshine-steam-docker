@@ -421,7 +421,7 @@ After that, Steam should see the mounted library normally.
 
 # Optional: Old School RuneScape with Bolt
 
-Native Bolt support is experimental and disabled by default. Enable it in `.env`:
+Native Bolt support is optional and disabled by default. Enable it in `.env`:
 
 ```dotenv
 ENABLE_BOLT=true
