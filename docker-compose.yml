@@ -42,6 +42,16 @@ services:
       - ./data:/home/gamer
       - "${GAMES_DIR:-./data/games}:/games"
 
+      # Host NVIDIA NGX loader DLLs (nvngx.dll, _nvngx.dll). Proton copies
+      # these from next to the host libGLX_nvidia into every prefix, but the
+      # toolkit does not expose that subdir inside the container, so Proton
+      # silently skips it and DX games hide DLSS. The entrypoint seeds
+      # prefixes from here at boot (scripts/seed-proton-ngx.sh). If your
+      # driver keeps them elsewhere, point NVIDIA_WINE_DIR there
+      # (dpkg -L libnvidia-gl | grep 'nvidia/wine'); an empty dir disables
+      # seeding. Requires the source to exist: mkdir -p it if unsure.
+      - "${NVIDIA_WINE_DIR:-/usr/lib/x86_64-linux-gnu/nvidia/wine}:/run/host-nvidia-wine:ro"
+
     device_cgroup_rules:
       - "c 13:* rwm"
       - "c 226:* rwm"

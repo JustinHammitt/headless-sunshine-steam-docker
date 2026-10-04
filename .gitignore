@@ -1,5 +1,6 @@
 # Runtime / persistent container data
 data/
+.cortexkit
 
 # Local environment files
 .env
