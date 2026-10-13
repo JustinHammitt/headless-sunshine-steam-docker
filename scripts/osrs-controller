@@ -1,0 +1,371 @@
+#!/usr/bin/python3
+"""Observe one virtual gamepad and map it to keys only in a focused OSRS client."""
+
+import argparse
+import ctypes as C
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import select
+import signal
+import time
+
+
+DEFAULTS = {
+    "enabled": True,
+    "deadzone": 0.25,
+    "release_deadzone": 0.18,
+    "device_name": "(?i)(sunshine|xbox|x-box)",
+    "window_class": "(?i)(runelite|jagex-jav|osrswindows|oldschool|osclient)",
+    "dpad": {"up": "F1", "right": "F2", "down": "F3", "left": "F4"},
+}
+# Linux input ABI constants; importing the state machine does not require evdev.
+ABS_X, ABS_HAT0X, ABS_HAT0Y = 0, 16, 17
+BTN_TL, BTN_TR = 310, 311
+DPAD_BUTTONS = {544: "up", 545: "down", 546: "left", 547: "right"}
+ARROWS = {"Left", "Right", "Up", "Down"}
+
+
+def load_config(path):
+    overrides = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(overrides, dict) or overrides.keys() - DEFAULTS.keys():
+        raise ValueError("Unknown controller settings or invalid configuration object")
+    config = {**DEFAULTS, **overrides}
+    config["dpad"] = {**DEFAULTS["dpad"], **overrides.get("dpad", {})}
+    if type(config["enabled"]) is not bool:
+        raise ValueError("enabled must be true or false")
+    if not 0 < config["release_deadzone"] < config["deadzone"] < 1:
+        raise ValueError("Require 0 < release_deadzone < deadzone < 1")
+    if config["dpad"].keys() != DEFAULTS["dpad"].keys() or any(
+        key not in {"F1", "F2", "F3", "F4"} for key in config["dpad"].values()
+    ):
+        raise ValueError("dpad must map up/right/down/left to F1–F4")
+    re.compile(config["device_name"])
+    re.compile(config["window_class"])
+    return config
+
+
+def normalized_axis(info, value=None):
+    midpoint = (info.min + info.max) / 2
+    span = (info.max - info.min) / 2
+    value = info.value if value is None else value
+    return max(-1, min(1, (value - midpoint) / span)) if span > 0 else 0
+
+
+class Mapping:
+    def __init__(self, config):
+        self.config = config
+        self.horizontal = None
+
+    def keys(self, axis, hat_x, hat_y, buttons):
+        threshold = (self.config["release_deadzone"] if self.horizontal
+                     else self.config["deadzone"])
+        # A reversal must cross the activation threshold, not just the release one.
+        if axis <= -self.config["deadzone"]:
+            self.horizontal = "Left"
+        elif axis >= self.config["deadzone"]:
+            self.horizontal = "Right"
+        elif (self.horizontal == "Left" and axis < -threshold
+              or self.horizontal == "Right" and axis > threshold):
+            pass
+        else:
+            self.horizontal = None
+        wanted = {self.horizontal} if self.horizontal else set()
+        if BTN_TL in buttons:
+            wanted.add("Up")
+        if BTN_TR in buttons:
+            wanted.add("Down")
+        directions = {direction for code, direction in DPAD_BUTTONS.items()
+                      if code in buttons}
+        if hat_x:
+            directions.add("left" if hat_x < 0 else "right")
+        if hat_y:
+            directions.add("up" if hat_y < 0 else "down")
+        wanted.update(self.config["dpad"][direction] for direction in directions)
+        return wanted
+
+
+class Output:
+    """Hold arrows; pulse F-keys once per press. Re-arm only at neutral."""
+    def __init__(self, emit):
+        self.emit = emit
+        self.held = set()
+        self.previous = set()
+        self.focus = None
+        self.armed = False
+
+    def release(self):
+        for key in sorted(self.held):
+            self.emit(key, False)
+        self.held.clear()
+        self.previous.clear()
+        self.armed = False
+        self.focus = None
+
+    def update(self, wanted, focus):
+        if focus != self.focus:
+            self.release()
+            self.focus = focus
+        if focus is None:
+            return
+        if not self.armed:
+            self.armed = not wanted
+            return
+        arrows = wanted & ARROWS
+        for key in sorted(self.held - arrows):
+            self.emit(key, False)
+        for key in sorted(arrows - self.held):
+            self.emit(key, True)
+        self.held = arrows
+        for key in sorted(wanted - ARROWS - self.previous):
+            self.emit(key, True)
+            self.emit(key, False)
+        self.previous = set(wanted)
+
+
+class ClassHint(C.Structure):
+    _fields_ = [("res_name", C.c_void_p), ("res_class", C.c_void_p)]
+
+
+class X11:
+    """Use installed X11/XTest libraries without another Python dependency."""
+    def __init__(self, pattern):
+        self.pattern = re.compile(pattern)
+        self.x = C.CDLL("libX11.so.6")
+        self.xt = C.CDLL("libXtst.so.6")
+        pointer, window = C.c_void_p, C.c_ulong
+        signatures = {
+            "XOpenDisplay": ([C.c_char_p], pointer),
+            "XCloseDisplay": ([pointer], C.c_int),
+            "XGetInputFocus": ([pointer, C.POINTER(window), C.POINTER(C.c_int)], C.c_int),
+            "XGetClassHint": ([pointer, window, C.POINTER(ClassHint)], C.c_int),
+            "XQueryTree": ([pointer, window, C.POINTER(window), C.POINTER(window),
+                            C.POINTER(C.POINTER(window)), C.POINTER(C.c_uint)], C.c_int),
+            "XFree": ([pointer], C.c_int),
+            "XSync": ([pointer, C.c_int], C.c_int),
+            "XStringToKeysym": ([C.c_char_p], C.c_ulong),
+            "XKeysymToKeycode": ([pointer, C.c_ulong], C.c_ubyte),
+        }
+        for name, (args, result) in signatures.items():
+            function = getattr(self.x, name)
+            function.argtypes, function.restype = args, result
+        # Windows can disappear during a focus query. Do not let BadWindow exit
+        # the mapper with camera keys still held.
+        callback_type = C.CFUNCTYPE(C.c_int, pointer, pointer)
+        self.error = False
+
+        def on_error(display, event):
+            self.error = True
+            return 0
+
+        self.error_handler = callback_type(on_error)
+        self.x.XSetErrorHandler.argtypes = [callback_type]
+        self.x.XSetErrorHandler.restype = pointer
+        self.x.XSetErrorHandler(self.error_handler)
+        self.xt.XTestFakeKeyEvent.argtypes = [pointer, C.c_uint, C.c_int, C.c_ulong]
+        self.xt.XTestFakeKeyEvent.restype = C.c_int
+        self.xt.XTestQueryExtension.argtypes = [pointer] + [C.POINTER(C.c_int)] * 4
+        self.xt.XTestQueryExtension.restype = C.c_int
+        self.display = self.x.XOpenDisplay(None)
+        if not self.display:
+            raise RuntimeError("Cannot open X11 display")
+        extension = [C.c_int() for _ in range(4)]
+        if not self.xt.XTestQueryExtension(self.display, *(C.byref(v) for v in extension)):
+            self.close()
+            raise RuntimeError("X11 display does not support XTest")
+        self.keycodes = {key: self.x.XKeysymToKeycode(
+            self.display, self.x.XStringToKeysym(key.encode()))
+            for key in ARROWS | {"F1", "F2", "F3", "F4"}}
+        if not all(self.keycodes.values()):
+            self.close()
+            raise RuntimeError("X11 keymap is missing required keys")
+
+    def emit(self, key, pressed):
+        self.xt.XTestFakeKeyEvent(self.display, self.keycodes[key], int(pressed), 0)
+        self.x.XSync(self.display, 0)
+
+    def focus(self):
+        self.error = False
+        window, revert = C.c_ulong(), C.c_int()
+        self.x.XGetInputFocus(self.display, C.byref(window), C.byref(revert))
+        original = window.value
+        # RuneLite can focus a child window; inspect its ancestors' WM_CLASS.
+        for _ in range(16):
+            if window.value <= 1:
+                break
+            hint = ClassHint()
+            matched = False
+            if self.x.XGetClassHint(self.display, window, C.byref(hint)):
+                for value in (hint.res_name, hint.res_class):
+                    if value:
+                        matched |= bool(self.pattern.search(
+                            C.string_at(value).decode("utf-8", errors="replace")))
+                        self.x.XFree(value)
+            if matched:
+                self.x.XSync(self.display, 0)
+                return None if self.error else original
+            root, parent = C.c_ulong(), C.c_ulong()
+            children, count = C.POINTER(C.c_ulong)(), C.c_uint()
+            ok = self.x.XQueryTree(self.display, window, C.byref(root),
+                                  C.byref(parent), C.byref(children), C.byref(count))
+            if children:
+                self.x.XFree(children)
+            if not ok or parent.value == window.value:
+                break
+            window = parent
+        return None
+
+    def close(self):
+        self.x.XCloseDisplay(self.display)
+
+
+def is_controller(device, pattern):
+    # Do not accidentally map a physical host controller or our keyboard output.
+    virtual = "/devices/virtual/" in (
+        Path("/sys/class/input") / Path(device.path).name / "device").resolve().as_posix()
+    caps = device.capabilities(absinfo=False)
+    return (virtual and re.search(pattern, device.name) is not None
+            and ABS_X in caps.get(3, []) and BTN_TL in caps.get(1, [])
+            and BTN_TR in caps.get(1, []))
+
+
+def snapshot(device):
+    axes = device.capabilities(absinfo=False).get(3, [])
+    def axis(code):
+        return device.absinfo(code).value if code in axes else 0
+    return (normalized_axis(device.absinfo(ABS_X)), axis(ABS_HAT0X),
+            axis(ABS_HAT0Y), set(device.active_keys()))
+
+
+def apply_event(state, event, axis_info):
+    """Preserve short taps even when down and up arrive in one read batch."""
+    if event.type == 3 and event.code == ABS_X:
+        state[0] = normalized_axis(axis_info, event.value)
+    elif event.type == 3 and event.code in (ABS_HAT0X, ABS_HAT0Y):
+        state[1 if event.code == ABS_HAT0X else 2] = event.value
+    elif event.type == 1 and event.code in {BTN_TL, BTN_TR, *DPAD_BUTTONS}:
+        if event.value == 1:
+            state[3].add(event.code)
+        elif event.value == 0:
+            state[3].discard(event.code)
+        else:
+            return False
+    else:
+        return False
+    return True
+
+
+def run(config, evdev, x11):
+    output = Output(x11.emit)
+    device = None
+    mapping = Mapping(config)
+    stopped = False
+    last_warning = None
+
+    def stop(signum, frame):
+        nonlocal stopped
+        stopped = True
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, stop)
+    try:
+        while not stopped:
+            if device is None:
+                for path in sorted(evdev.list_devices()):
+                    candidate = None
+                    try:
+                        candidate = evdev.InputDevice(path)
+                        if is_controller(candidate, config["device_name"]):
+                            device = candidate
+                            mapping = Mapping(config)
+                            logging.info("Attached %s: %s", path, device.name)
+                            break
+                    except OSError as error:
+                        if str(error) != last_warning:
+                            logging.warning("Input device unavailable: %s", error)
+                            last_warning = str(error)
+                    finally:
+                        if candidate is not None and candidate is not device:
+                            candidate.close()
+                if device is None:
+                    time.sleep(1)
+                    continue
+            try:
+                readable, _, _ = select.select([device], [], [], 0.05)
+                focus = x11.focus()
+                state = list(snapshot(device))
+                # Do not replay input queued for the previous focused window.
+                changed_focus = focus != output.focus
+                dropped = False
+                if readable:
+                    axis_info = device.absinfo(ABS_X)
+                    for event in device.read():
+                        if event.type == 0 and event.code == 3:  # SYN_DROPPED
+                            output.release()
+                            dropped = True
+                        if not changed_focus and not dropped and apply_event(state, event, axis_info):
+                            output.update(mapping.keys(*state), focus)
+                    # Current kernel state reconciles dropped events and any
+                    # changes arriving while the batch was being drained.
+                    state = list(snapshot(device))
+                output.update(mapping.keys(*state), focus)
+            except BlockingIOError:
+                continue
+            except OSError as error:
+                output.release()
+                device.close()
+                device = None
+                logging.info("Controller disconnected/unavailable: %s", error)
+                time.sleep(0.25)
+    finally:
+        output.release()
+        if device is not None:
+            device.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=Path(
+        os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+        / "osrs-controller.json")
+    parser.add_argument("--print-config", action="store_true")
+    parser.add_argument("--list-devices", action="store_true")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.print_config:
+        print(json.dumps(DEFAULTS, indent=4))
+        return
+    config = load_config(args.config)
+    if not config["enabled"]:
+        logging.info("Disabled by configuration")
+        return
+    import evdev
+    import fcntl
+    if args.list_devices:
+        for path in sorted(evdev.list_devices()):
+            device = evdev.InputDevice(path)
+            try:
+                print(path, repr(device.name), "eligible=" + str(
+                    is_controller(device, config["device_name"])))
+            finally:
+                device.close()
+        return
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000"))
+    with (runtime / "osrs-controller.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logging.info("Mapper already running")
+            return
+        x11 = X11(config["window_class"])
+        try:
+            logging.info("Ready; waiting for a virtual controller and focused OSRS client")
+            run(config, evdev, x11)
+        finally:
+            x11.close()
+
+
+if __name__ == "__main__":
+    main()

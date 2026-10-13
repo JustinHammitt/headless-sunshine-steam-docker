@@ -537,6 +537,74 @@ Clients receive a termination signal with a five-second grace period before
 forced termination. Log out in-game first when needed. This applies to every
 Sunshine app using the global preparation commands, including Desktop.
 
+## OSRS handheld controller mapping
+
+Bolt-enabled images include a small Python `evdev` mapper. It runs as `gamer`
+in the graphical session, independently of Steam, and sends X11 keyboard events
+only while a matching RuneLite/OSRS window has keyboard focus. It also works
+when launching Bolt from the Desktop menu. No mapper or `python3-evdev` package
+is added to Bolt-disabled images.
+
+| Control | Keyboard action |
+| --- | --- |
+| Left stick left / right | Hold Left / Right arrow (camera rotation) |
+| Left / right bumper | Hold Up / Down arrow (camera tilt) |
+| D-pad up / right / down / left | F1 / F2 / F3 / F4, once per press |
+
+Right-stick virtual mouse, left-stick vertical zoom, face buttons, and triggers
+are not mapped or intercepted. Existing client mappings remain in effect; this
+mapper cannot remove a zoom binding in Moonlight or handheld software. Stick
+rotation uses a 25% activation deadzone and an 18% release threshold. Camera
+speed is the game's keyboard camera speed, not proportional to stick travel.
+
+The mapper observes the first eligible virtual Xbox/Sunshine gamepad without
+grabbing it. It rescans after device removal and releases camera keys on focus
+loss, controller removal, or normal shutdown. After attaching a controller or
+changing focus (including switching account windows), return the mapped
+controls to neutral before using them. This avoids carrying held inputs into
+a new window. It does not map controls in the Bolt launcher itself.
+
+Rebuild and recreate on the Linux host to install it:
+
+```bash
+docker compose up -d --build sunshine-steam
+```
+
+Optional settings live at `./data/.config/osrs-controller.json` on the host
+(`/home/gamer/.config/osrs-controller.json` inside the container). Missing fields
+use defaults. For example:
+
+```json
+{
+    "enabled": true,
+    "deadzone": 0.25,
+    "release_deadzone": 0.18,
+    "dpad": {"up": "F1", "right": "F2", "down": "F3", "left": "F4"}
+}
+```
+
+Set `enabled` to `false` to disable it, or change D-pad assignments to match
+your in-game F-key settings. Restart the container after changing settings.
+`osrs-controller --print-config` shows all defaults, including the `device_name`
+and `window_class` regular expressions. Custom clients may need a different
+`window_class`; use `xprop WM_CLASS` in the streamed desktop and click the client
+window to inspect its identity. Physical host controllers are excluded even if
+their names match.
+
+With Moonlight connected, inspect discovery and startup errors:
+
+```bash
+docker compose exec -u gamer sunshine-steam osrs-controller --list-devices
+docker compose exec -u gamer sunshine-steam tail -n 50 /home/gamer/.local/state/osrs-controller.log
+```
+
+Validate on the handheld: rotate in both directions, hold each bumper, press
+each D-pad direction, and check virtual mouse and existing zoom still work.
+Then switch away from OSRS while holding a camera control, reconnect Moonlight,
+and switch between account windows. Camera keys should release and controls
+should work again after returning to neutral. A second manual mapper process
+is prevented by a per-session lock.
+
 ## Reopen apps from the desktop
 
 Right-click an empty area of the streamed desktop to open the gaming menu:

@@ -41,7 +41,8 @@ RUN --mount=type=bind,source=sunshine-config,target=/assets \
         && install -m 0644 /assets/osrs-app.json /out/usr/local/share/headless-sunshine-steam/osrs-app.json \
         && install -m 0644 /assets/covers/bolt-rs.png /out/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png \
         && install -m 0755 /scripts/prepare-bolt-home /out/usr/local/bin/prepare-bolt-home \
-        && install -m 0755 /scripts/stop-bolt-session /out/usr/local/bin/stop-bolt-session; \
+        && install -m 0755 /scripts/stop-bolt-session /out/usr/local/bin/stop-bolt-session \
+        && install -m 0755 /scripts/osrs-controller /out/usr/local/bin/osrs-controller; \
     fi
 
 FROM ubuntu:24.04 AS runtime
@@ -168,7 +169,7 @@ RUN if [ "$ENABLE_BOLT" = true ]; then \
             libcups2t64 libasound2t64 libgbm1 libdrm2 libxkbcommon0 \
             libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
             libglib2.0-0t64 libdbus-1-3 libx11-6 libxcb1 libxext6 \
-            libxshmfence1 fonts-dejavu-core openjdk-17-jre \
+            libxshmfence1 fonts-dejavu-core openjdk-17-jre python3-evdev libxtst6 \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -222,12 +223,15 @@ RUN install -d -o gamer -g gamer \
 # Validate cover access as Sunshine's actual runtime user, not build-time root.
 USER gamer
 RUN if [ "$ENABLE_BOLT" = true ]; then \
-        python3 -c "from pathlib import Path; p = Path('/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png'); assert p.open('rb').read(8).hex() == '89504e470d0a1a0a', 'Invalid cover PNG'"; \
+        python3 -c "from pathlib import Path; p = Path('/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png'); assert p.open('rb').read(8).hex() == '89504e470d0a1a0a', 'Invalid cover PNG'" \
+        && python3 -c "import evdev, ctypes; ctypes.CDLL('libX11.so.6'); ctypes.CDLL('libXtst.so.6')" \
+        && /usr/local/bin/osrs-controller --print-config > /dev/null; \
     else \
         test ! -e /usr/local/bin/bolt \
         && test ! -e /opt/bolt-launcher \
         && test ! -e /usr/local/bin/prepare-bolt-home \
         && test ! -e /usr/local/bin/stop-bolt-session \
+        && test ! -e /usr/local/bin/osrs-controller \
         && test ! -e /usr/local/share/headless-sunshine-steam/osrs-app.json \
         && test ! -e /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png; \
     fi
@@ -484,6 +488,13 @@ PIDS+=("$!")
 
 picom --backend glx &
 PIDS+=("$!")
+
+# Observe gamepads without grabbing them; activate only in an OSRS client.
+# Installed only in Bolt-enabled images, including Desktop/menu launches.
+if [[ -x /usr/local/bin/osrs-controller ]]; then
+    /usr/local/bin/osrs-controller >> "$HOME/.local/state/osrs-controller.log" 2>&1 &
+    PIDS+=("$!")
+fi
 
 sunshine &
 SUNSHINE_PID="$!"
