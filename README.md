@@ -557,12 +557,18 @@ mapper cannot remove a zoom binding in Moonlight or handheld software. Stick
 rotation uses a 25% activation deadzone and an 18% release threshold. Camera
 speed is the game's keyboard camera speed, not proportional to stick travel.
 
-The mapper observes the first eligible virtual Xbox/Sunshine gamepad without
-grabbing it. It rescans after device removal and releases camera keys on focus
+The mapper observes all eligible virtual Xbox/Sunshine gamepads without
+grabbing them. Mapped input selects the active controller, so an idle device from
+another stream cannot hide your handheld. Right-stick activity and releases from
+an inactive controller do not switch the selection. It rescans every second,
+including while another controller remains connected, and releases camera keys on focus
 loss, controller removal, or normal shutdown. After attaching a controller or
 changing focus (including switching account windows), return the mapped
 controls to neutral before using them. This avoids carrying held inputs into
 a new window. It does not map controls in the Bolt launcher itself.
+
+The log records `Watching` for discovered devices, `Active controller` when
+mapped input selects one, and `Focus accepted` when a matching client gains focus.
 
 Rebuild and recreate on the Linux host to install it:
 

@@ -11,6 +11,48 @@ MODULE = runpy.run_path(str(ROOT / "scripts/osrs-controller"))
 CONFIG = MODULE["DEFAULTS"]
 
 
+def event(event_type, code, value):
+    return SimpleNamespace(type=event_type, code=code, value=value)
+
+
+class FakeDevice:
+    def __init__(self, path, axis=0):
+        self.path, self.name = path, "Sunshine Xbox Controller"
+        self.axes = {0: axis, 16: 0, 17: 0}
+        self.buttons = set()
+        self.pending = []
+        self.dead = False
+        self.closed = 0
+
+    def capabilities(self, **kwargs):
+        return {3: [0, 16, 17], 1: [310, 311, 544, 545, 546, 547]}
+
+    def absinfo(self, code):
+        if self.dead:
+            raise OSError("disconnected")
+        return SimpleNamespace(min=-100, max=100, value=self.axes[code])
+
+    def active_keys(self):
+        return list(self.buttons)
+
+    def read(self):
+        if self.dead:
+            raise OSError("disconnected")
+        for item in self.pending:
+            if item.type == 3:
+                self.axes[item.code] = item.value
+            elif item.type == 1:
+                if item.value:
+                    self.buttons.add(item.code)
+                else:
+                    self.buttons.discard(item.code)
+            yield item
+        self.pending = []
+
+    def close(self):
+        self.closed += 1
+
+
 class ControllerTests(unittest.TestCase):
     def mapping(self):
         return MODULE["Mapping"](CONFIG)
@@ -95,39 +137,100 @@ class ControllerTests(unittest.TestCase):
             device.capabilities.return_value = {3: [0], 1: [310, 311]}
             self.assertFalse(eligible(device, CONFIG["device_name"]))
 
-    def test_disconnect_reconnect_and_signal_release_held_keys(self):
+    def simulate(self, devices, frames):
         run = MODULE["run"]
-        first, second = Mock(), Mock()
-        first.name, second.name = "Xbox Controller", "Sunshine Xbox Controller"
-        evdev = Mock()
-        evdev.list_devices.return_value = ["/dev/input/event10"]
-        evdev.InputDevice.side_effect = [first, second]
+        available = {device.path: device for device in devices}
+        evdev = SimpleNamespace(list_devices=lambda: list(available),
+                                InputDevice=lambda path: available[path])
         x11 = Mock()
-        x11.focus.return_value = 10
         handlers = {}
+        clock, focus = [10], [10]
+        x11.focus.side_effect = lambda: focus[0]
+        frames = iter(frames)
 
-        def register(signum, callback):
-            handlers[signum] = callback
-
-        states = iter([(0, 0, 0, set()), (-1, 0, 0, set()), OSError("disconnected"),
-                       (-1, 0, 0, set()), (0, 0, 0, set()), (1, 0, 0, set())])
-
-        def state(device):
-            value = next(states)
-            if isinstance(value, Exception):
-                raise value
-            if value[0] == 1:
+        def poll(watched, *args):
+            clock[0] += 1.1
+            frame = next(frames, None)
+            if frame is None:
                 handlers[signal.SIGTERM](signal.SIGTERM, None)
-            return value
+                return [], [], []
+            focus[0] = frame.get("focus", focus[0])
+            for device in frame.get("add", []):
+                available[device.path] = device
+            for path in frame.get("remove", []):
+                available.pop(path).dead = True
+            for path, events in frame.get("events", {}).items():
+                available[path].pending = events
+            return [d for d in watched if d.pending or d.dead], [], []
 
-        with patch.dict(run.__globals__, is_controller=lambda *args: True, snapshot=state), \
-                patch.object(MODULE["signal"], "signal", side_effect=register), \
-                patch.object(MODULE["select"], "select", return_value=([], [], [])):
+        with patch.dict(run.__globals__, is_controller=lambda *args: True), \
+                patch.object(MODULE["signal"], "signal", side_effect=lambda s, h: handlers.update({s: h})), \
+                patch.object(MODULE["time"], "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(MODULE["select"], "select", side_effect=poll):
             run(CONFIG, evdev, x11)
-        self.assertEqual([call.args for call in x11.emit.call_args_list],
+        return [call.args for call in x11.emit.call_args_list]
+
+    def test_disconnect_reconnect_and_signal_release_held_keys(self):
+        first = FakeDevice("/dev/input/event26")
+        second = FakeDevice("/dev/input/event29")
+        events = self.simulate([first], [{},
+            {"events": {first.path: [event(3, 0, -100)]}},
+            {"remove": [first.path]}, {"add": [second]}, {},
+            {"events": {second.path: [event(3, 0, 100)]}}])
+        self.assertEqual(events,
                          [("Left", True), ("Left", False), ("Right", True), ("Right", False)])
-        first.close.assert_called_once()
-        second.close.assert_called_once()
+        self.assertEqual((first.closed, second.closed), (1, 1))
+
+    def test_idle_first_controller_does_not_hide_active_second_controller(self):
+        old, handheld = FakeDevice("/dev/input/event26"), FakeDevice("/dev/input/event29")
+        events = self.simulate([old, handheld], [{},
+            {"events": {handheld.path: [event(3, 0, -100)]}},
+            {"events": {handheld.path: [event(3, 0, 0), event(1, 310, 1), event(1, 310, 0)]}},
+            {"events": {handheld.path: [event(1, 544, 1), event(1, 544, 0)]}}])
+        self.assertEqual(events, [("Left", True), ("Left", False),
+                                 ("Up", True), ("Up", False), ("F1", True), ("F1", False)])
+
+    def test_hotplug_is_discovered_while_old_controller_remains_connected(self):
+        old, handheld = FakeDevice("/dev/input/event26"), FakeDevice("/dev/input/event29")
+        events = self.simulate([old], [{}, {"add": [handheld]}, {},
+            {"events": {handheld.path: [event(1, 311, 1), event(1, 311, 0)]}}])
+        self.assertEqual(events, [("Down", True), ("Down", False)])
+
+    def test_switch_releases_previous_camera_and_ignores_inactive_release(self):
+        first, second = FakeDevice("/dev/input/event26"), FakeDevice("/dev/input/event29")
+        events = self.simulate([first, second], [{},
+            {"events": {first.path: [event(3, 0, -100)]}},
+            {"events": {second.path: [event(3, 0, 100)]}},
+            {"events": {first.path: [event(3, 0, 0)]}}])
+        self.assertEqual(events, [("Left", True), ("Left", False),
+                                 ("Right", True), ("Right", False)])
+
+    def test_stale_held_input_and_right_stick_do_not_select_controller(self):
+        stale, handheld = FakeDevice("/dev/input/event26", axis=-100), FakeDevice("/dev/input/event29")
+        events = self.simulate([stale, handheld], [{},
+            {"events": {handheld.path: [event(1, 310, 1)]}},
+            {"events": {stale.path: [event(3, 0, -90), event(3, 3, 100)]}}])
+        self.assertEqual(events, [("Up", True), ("Up", False)])
+
+    def test_inactive_button_release_does_not_steal_selection_with_other_button_held(self):
+        first, second = FakeDevice("/dev/input/event26"), FakeDevice("/dev/input/event29")
+        events = self.simulate([first, second], [{},
+            {"events": {first.path: [event(1, 310, 1), event(1, 311, 1)]}},
+            {"events": {second.path: [event(3, 0, 100)]}},
+            {"events": {first.path: [event(1, 310, 0)]}}])
+        self.assertEqual(events, [("Up", True), ("Down", True),
+                                 ("Down", False), ("Up", False),
+                                 ("Right", True), ("Right", False)])
+
+    def test_focus_loss_and_return_require_neutral_on_active_controller(self):
+        pad = FakeDevice("/dev/input/event29")
+        events = self.simulate([pad], [{},
+            {"events": {pad.path: [event(3, 0, -100)]}},
+            {"focus": None}, {"focus": 11}, {},
+            {"events": {pad.path: [event(3, 0, 0)]}},
+            {"events": {pad.path: [event(3, 0, 100)]}}])
+        self.assertEqual(events, [("Left", True), ("Left", False),
+                                 ("Right", True), ("Right", False)])
 
     def test_config_validation_and_partial_overrides(self):
         load = MODULE["load_config"]
@@ -183,35 +286,14 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(x11.focus())
 
     def test_dropped_events_release_camera_and_require_neutral(self):
-        run = MODULE["run"]
-        device = Mock()
-        device.name = "Xbox Controller"
-        device.absinfo.return_value = SimpleNamespace(min=-100, max=100, value=-100)
-        device.read.return_value = [SimpleNamespace(type=0, code=3, value=0),
-                                   SimpleNamespace(type=1, code=311, value=1)]
-        evdev, x11 = Mock(), Mock()
-        evdev.list_devices.return_value = ["/dev/input/event10"]
-        evdev.InputDevice.return_value = device
-        x11.focus.return_value = 10
-        handlers = {}
-        states = iter([(0, 0, 0, set()), (-1, 0, 0, set()),
-                       (-1, 0, 0, set()), (-1, 0, 0, set()), (-1, 0, 0, set())])
-        reads = iter([([], [], []), ([], [], []), ([device], [], []), ([], [], [])])
-
-        def snapshot(device):
-            value = next(states)
-            if not list_count[0]:
-                handlers[signal.SIGTERM](signal.SIGTERM, None)
-            list_count[0] -= 1
-            return value
-
-        list_count = [4]
-        with patch.dict(run.__globals__, is_controller=lambda *args: True, snapshot=snapshot), \
-                patch.object(MODULE["signal"], "signal", side_effect=lambda s, h: handlers.update({s: h})), \
-                patch.object(MODULE["select"], "select", side_effect=lambda *args: next(reads)):
-            run(CONFIG, evdev, x11)
-        self.assertEqual([call.args for call in x11.emit.call_args_list],
-                         [("Left", True), ("Left", False)])
+        pad = FakeDevice("/dev/input/event29")
+        events = self.simulate([pad], [{},
+            {"events": {pad.path: [event(3, 0, -100)]}},
+            {"events": {pad.path: [event(0, 3, 0), event(1, 311, 1)]}}, {},
+            {"events": {pad.path: [event(3, 0, 0), event(1, 311, 0)]}},
+            {"events": {pad.path: [event(1, 311, 1)]}}])
+        self.assertEqual(events, [("Left", True), ("Left", False),
+                                 ("Down", True), ("Down", False)])
 
 
 if __name__ == "__main__":

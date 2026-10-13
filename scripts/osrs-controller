@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Observe one virtual gamepad and map it to keys only in a focused OSRS client."""
+"""Observe virtual gamepads and map active input only in a focused OSRS client."""
 
 import argparse
 import ctypes as C
@@ -257,12 +257,33 @@ def apply_event(state, event, axis_info):
     return True
 
 
+class Controller:
+    def __init__(self, device, config):
+        self.device = device
+        self.mapping = Mapping(config)
+        self.axis_info = device.absinfo(ABS_X)
+        self.state = list(snapshot(device))
+        # An old controller may already have stale held input when discovered.
+        # Only subsequent mapped activity after neutral may select this device.
+        self.ready = not self.wanted()
+
+    def wanted(self):
+        return self.mapping.keys(*self.state)
+
+    def refresh(self):
+        self.state = list(snapshot(self.device))
+        if not self.wanted():
+            self.ready = True
+
+
 def run(config, evdev, x11):
     output = Output(x11.emit)
-    device = None
-    mapping = Mapping(config)
+    controllers = {}
+    active = None
     stopped = False
     last_warning = None
+    next_scan = 0
+    last_focus = None
 
     def stop(signum, frame):
         nonlocal stopped
@@ -270,59 +291,92 @@ def run(config, evdev, x11):
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, stop)
+
+    def remove(path):
+        nonlocal active
+        pad = controllers.pop(path)
+        if pad is active:
+            output.release()
+            active = None
+        pad.device.close()
+        logging.info("Controller removed: %s", path)
+
     try:
         while not stopped:
-            if device is None:
-                for path in sorted(evdev.list_devices()):
+            if time.monotonic() >= next_scan:
+                paths = set(evdev.list_devices())
+                for path in set(controllers) - paths:
+                    remove(path)
+                for path in sorted(paths - controllers.keys()):
                     candidate = None
                     try:
                         candidate = evdev.InputDevice(path)
                         if is_controller(candidate, config["device_name"]):
-                            device = candidate
-                            mapping = Mapping(config)
-                            logging.info("Attached %s: %s", path, device.name)
-                            break
+                            controllers[path] = Controller(candidate, config)
+                            logging.info("Watching %s: %s", path, candidate.name)
                     except OSError as error:
                         if str(error) != last_warning:
                             logging.warning("Input device unavailable: %s", error)
                             last_warning = str(error)
                     finally:
-                        if candidate is not None and candidate is not device:
+                        if candidate is not None and path not in controllers:
                             candidate.close()
-                if device is None:
-                    time.sleep(1)
-                    continue
-            try:
-                readable, _, _ = select.select([device], [], [], 0.05)
-                focus = x11.focus()
-                state = list(snapshot(device))
-                # Do not replay input queued for the previous focused window.
-                changed_focus = focus != output.focus
-                dropped = False
-                if readable:
-                    axis_info = device.absinfo(ABS_X)
-                    for event in device.read():
+                next_scan = time.monotonic() + 1
+            readable, _, _ = select.select(
+                [pad.device for pad in controllers.values()], [], [], 0.05)
+            focus = x11.focus()
+            changed_focus = focus != output.focus
+            if focus != last_focus:
+                if focus:
+                    logging.info("Focus accepted: window=0x%x", focus)
+                else:
+                    logging.info("Focus outside OSRS; camera keys released")
+                last_focus = focus
+            output.update(active.wanted() if active else set(), focus)
+            for pad in list(controllers.values()):
+                device = pad.device
+                try:
+                    dropped = False
+                    events = device.read() if device in readable else ()
+                    for event in events:
                         if event.type == 0 and event.code == 3:  # SYN_DROPPED
-                            output.release()
                             dropped = True
-                        if not changed_focus and not dropped and apply_event(state, event, axis_info):
-                            output.update(mapping.keys(*state), focus)
-                    # Current kernel state reconciles dropped events and any
-                    # changes arriving while the batch was being drained.
-                    state = list(snapshot(device))
-                output.update(mapping.keys(*state), focus)
-            except BlockingIOError:
-                continue
-            except OSError as error:
-                output.release()
-                device.close()
-                device = None
-                logging.info("Controller disconnected/unavailable: %s", error)
-                time.sleep(0.25)
+                            pad.ready = False
+                            if pad is active:
+                                output.release()
+                                active = None
+                        # Do not replay queued input across a focus change or
+                        # use right-stick/mouse activity to select a controller.
+                        if changed_focus or dropped or not apply_event(pad.state, event, pad.axis_info):
+                            continue
+                        wanted = pad.wanted()
+                        if not wanted:
+                            pad.ready = True
+                        activating = (event.type == 1 and event.value == 1
+                                      or event.type == 3 and event.code == ABS_X
+                                      and abs(pad.state[0]) >= config["deadzone"]
+                                      or event.type == 3 and event.code in (ABS_HAT0X, ABS_HAT0Y)
+                                      and event.value != 0)
+                        if activating and wanted and pad.ready and focus and pad is not active:
+                            was_armed = output.armed and output.focus == focus
+                            output.release()
+                            if was_armed:
+                                output.update(set(), focus)
+                            active = pad
+                            logging.info("Active controller: %s: %s", device.path, device.name)
+                        if pad is active:
+                            output.update(wanted, focus)
+                    pad.refresh()
+                except BlockingIOError:
+                    continue
+                except OSError as error:
+                    logging.info("Controller unavailable: %s: %s", device.path, error)
+                    remove(device.path)
+            output.update(active.wanted() if active else set(), focus)
     finally:
         output.release()
-        if device is not None:
-            device.close()
+        for pad in controllers.values():
+            pad.device.close()
 
 
 def main():
