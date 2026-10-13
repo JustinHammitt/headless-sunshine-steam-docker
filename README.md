@@ -529,9 +529,13 @@ setsid env DISPLAY=:0 /usr/local/bin/bolt >> /home/gamer/.local/state/bolt-launc
 ```
 
 Global preparation commands are enabled by default for resolution switching. Bolt inherits
-the existing gamer session's runtime and audio environment. A detached application
-continues running after the stream ends; close RuneLite and Bolt from the desktop
-when finished.
+the existing gamer session's runtime and audio environment. Disconnecting the stream
+leaves the applications running so you can resume. Moonlight's **Quit Session**
+closes Bolt and all RuneLite/OSRS clients owned by the gamer account, including
+multiple account windows, just as the existing quit hook shuts down Steam.
+Clients receive a termination signal with a five-second grace period before
+forced termination. Log out in-game first when needed. This applies to every
+Sunshine app using the global preparation commands, including Desktop.
 
 ## Reopen apps from the desktop
 
