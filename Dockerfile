@@ -40,7 +40,8 @@ RUN --mount=type=bind,source=sunshine-config,target=/assets \
         && chmod 0755 /out/usr/local/share/headless-sunshine-steam \
         && install -m 0644 /assets/osrs-app.json /out/usr/local/share/headless-sunshine-steam/osrs-app.json \
         && install -m 0644 /assets/covers/bolt-rs.png /out/usr/local/share/headless-sunshine-steam/covers/bolt-rs.png \
-        && install -m 0755 /scripts/prepare-bolt-home /out/usr/local/bin/prepare-bolt-home; \
+        && install -m 0755 /scripts/prepare-bolt-home /out/usr/local/bin/prepare-bolt-home \
+        && install -m 0755 /scripts/stop-bolt-session /out/usr/local/bin/stop-bolt-session; \
     fi
 
 FROM ubuntu:24.04 AS runtime
@@ -226,6 +227,7 @@ RUN if [ "$ENABLE_BOLT" = true ]; then \
         test ! -e /usr/local/bin/bolt \
         && test ! -e /opt/bolt-launcher \
         && test ! -e /usr/local/bin/prepare-bolt-home \
+        && test ! -e /usr/local/bin/stop-bolt-session \
         && test ! -e /usr/local/share/headless-sunshine-steam/osrs-app.json \
         && test ! -e /usr/local/share/headless-sunshine-steam/covers/bolt-rs.png; \
     fi
@@ -346,6 +348,12 @@ RUN cat > /usr/local/bin/sunshine-resolution-undo <<'EOF'
 #!/bin/bash
 
 export DISPLAY=:0
+
+# Like Steam, detached Bolt clients are closed only on Quit Session, not a
+# stream disconnect. Keep this bounded because Sunshine waits for undo hooks.
+if [[ -x /usr/local/bin/stop-bolt-session ]]; then
+    timeout --signal=TERM --kill-after=1s 8s /usr/local/bin/stop-bolt-session || true
+fi
 
 # Sunshine runs this undo command synchronously on every app quit and waits
 # for it without a timeout, so it must never block. Only ask Steam to shut

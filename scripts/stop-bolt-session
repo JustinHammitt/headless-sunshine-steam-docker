@@ -1,0 +1,98 @@
+#!/usr/bin/python3
+"""Bounded cleanup of this user's Bolt launcher and detached game clients."""
+
+import os
+from pathlib import Path
+import signal
+import time
+
+
+def read_processes(proc=Path("/proc"), uid=None):
+    uid = os.getuid() if uid is None else uid
+    processes = {}
+    for directory in proc.iterdir():
+        if not directory.name.isdigit():
+            continue
+        try:
+            if directory.stat().st_uid != uid:
+                continue
+            # comm can contain spaces and parentheses; fields after it start at state.
+            fields = directory.joinpath("stat").read_text().rsplit(")", 1)[1].split()
+            if fields[0] == "Z":
+                continue
+            args = directory.joinpath("cmdline").read_bytes().decode(
+                "utf-8", errors="replace").rstrip("\0").split("\0")
+            executable = os.readlink(directory / "exe").removesuffix(" (deleted)")
+            cwd = os.readlink(directory / "cwd")
+            processes[int(directory.name)] = {
+                "parent": int(fields[1]), "started": fields[19],
+                "args": args, "exe": executable, "cwd": cwd,
+            }
+        except (OSError, ValueError, IndexError):
+            # Processes may exit during the scan.
+            continue
+    return processes
+
+
+def session_processes(processes):
+    targets = set()
+    for pid, process in processes.items():
+        executable = process["exe"]
+        args = process["args"]
+        java = Path(executable).name == "java"
+        bolt = executable == "/usr/local/bin/bolt" or executable.startswith(
+            "/opt/bolt-launcher/")
+        runelite = java and any(
+            Path(arg).name.lower().startswith("runelite") and arg.lower().endswith(".jar")
+            or arg in ("net.runelite.launcher.Launcher", "net.runelite.client.RuneLite")
+            for arg in args
+        )
+        # Bolt sets the game working directory before exec, even for custom JARs.
+        game_in_bolt_data = Path(process["cwd"]).name == "bolt-launcher" and (
+            java or Path(executable).name.startswith("wine")
+            or any(Path(arg).name.lower() == "osrswindows.exe" for arg in args)
+        )
+        if bolt or runelite or game_in_bolt_data:
+            targets.add(pid)
+    # Include wrappers and children before terminating their parents. Bolt uses
+    # setsid() for games, so process-group termination alone is insufficient.
+    while True:
+        children = {pid for pid, process in processes.items()
+                    if process["parent"] in targets}
+        if children <= targets:
+            return {pid: processes[pid]["started"] for pid in targets}
+        targets.update(children)
+
+
+def signal_targets(targets, processes, signum):
+    for pid, started in targets.items():
+        if pid not in processes or processes[pid]["started"] != started:
+            continue
+        try:
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+
+
+def stop_session(grace=5):
+    processes = read_processes()
+    targets = session_processes(processes)
+    signal_targets(targets, processes, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while targets:
+        processes = read_processes()
+        # Capture clients forked during shutdown, including reparented RuneLite.
+        targets.update(session_processes(processes))
+        targets = {pid: started for pid, started in targets.items()
+                   if pid in processes and processes[pid]["started"] == started}
+        if not targets:
+            break
+        if time.monotonic() >= deadline:
+            signal_targets(targets, processes, signal.SIGKILL)
+            break
+        signal_targets(targets, processes, signal.SIGTERM)
+        time.sleep(0.1)
+
+
+if __name__ == "__main__":
+    stop_session()
