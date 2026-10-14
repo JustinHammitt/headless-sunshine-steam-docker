@@ -17,15 +17,19 @@ DEFAULTS = {
     "enabled": True,
     "deadzone": 0.25,
     "release_deadzone": 0.18,
+    "diagonal_ratio": 0.5,
+    "zoom_steps_per_second": 6,
+    "zoom_invert": False,
     "device_name": "(?i)(sunshine|xbox|x-box)",
     "window_class": "(?i)(runelite|jagex-jav|osrswindows|oldschool|osclient)",
     "dpad": {"up": "F1", "right": "F2", "down": "F3", "left": "F4"},
 }
 # Linux input ABI constants; importing the state machine does not require evdev.
-ABS_X, ABS_HAT0X, ABS_HAT0Y = 0, 16, 17
+ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y = 0, 1, 16, 17
 BTN_TL, BTN_TR = 310, 311
 DPAD_BUTTONS = {544: "up", 545: "down", 546: "left", 547: "right"}
 ARROWS = {"Left", "Right", "Up", "Down"}
+WHEEL_ACTIONS = {"WheelUp", "WheelDown"}
 
 
 def load_config(path):
@@ -38,6 +42,12 @@ def load_config(path):
         raise ValueError("enabled must be true or false")
     if not 0 < config["release_deadzone"] < config["deadzone"] < 1:
         raise ValueError("Require 0 < release_deadzone < deadzone < 1")
+    if not 0 < config["diagonal_ratio"] <= 1:
+        raise ValueError("diagonal_ratio must be greater than 0 and at most 1")
+    if not 1 <= config["zoom_steps_per_second"] <= 30:
+        raise ValueError("zoom_steps_per_second must be between 1 and 30")
+    if type(config["zoom_invert"]) is not bool:
+        raise ValueError("zoom_invert must be true or false")
     if config["dpad"].keys() != DEFAULTS["dpad"].keys() or any(
         key not in {"F1", "F2", "F3", "F4"} for key in config["dpad"].values()
     ):
@@ -58,21 +68,35 @@ class Mapping:
     def __init__(self, config):
         self.config = config
         self.horizontal = None
+        self.vertical = None
 
-    def keys(self, axis, hat_x, hat_y, buttons):
-        threshold = (self.config["release_deadzone"] if self.horizontal
+    def direction(self, value, previous, negative, positive):
+        threshold = (self.config["release_deadzone"] if previous
                      else self.config["deadzone"])
         # A reversal must cross the activation threshold, not just the release one.
-        if axis <= -self.config["deadzone"]:
-            self.horizontal = "Left"
-        elif axis >= self.config["deadzone"]:
-            self.horizontal = "Right"
-        elif (self.horizontal == "Left" and axis < -threshold
-              or self.horizontal == "Right" and axis > threshold):
-            pass
-        else:
-            self.horizontal = None
+        if value <= -self.config["deadzone"]:
+            return negative
+        if value >= self.config["deadzone"]:
+            return positive
+        if (previous == negative and value < -threshold
+                or previous == positive and value > threshold):
+            return previous
+        return None
+
+    def keys(self, axis, hat_x, hat_y, buttons, vertical=0):
+        # Suppress the minor axis on cardinal movements, while allowing both
+        # actions on deliberate diagonals. Captured horizontal movement had
+        # ~33% vertical deflection; the default ratio rejects that cross-talk.
+        ratio = self.config["diagonal_ratio"]
+        horizontal_value = axis if abs(axis) >= abs(vertical) * ratio else 0
+        vertical_value = vertical if abs(vertical) >= abs(axis) * ratio else 0
+        self.horizontal = self.direction(horizontal_value, self.horizontal, "Left", "Right")
+        if self.config["zoom_invert"]:
+            vertical_value = -vertical_value
+        self.vertical = self.direction(vertical_value, self.vertical, "WheelUp", "WheelDown")
         wanted = {self.horizontal} if self.horizontal else set()
+        if self.vertical:
+            wanted.add(self.vertical)
         if BTN_TL in buttons:
             wanted.add("Up")
         if BTN_TR in buttons:
@@ -88,9 +112,12 @@ class Mapping:
 
 
 class Output:
-    """Hold arrows; pulse F-keys once per press. Re-arm only at neutral."""
-    def __init__(self, emit):
+    """Hold arrows, pulse F-keys, and rate-limit wheel ticks while armed."""
+    def __init__(self, emit, scroll=None, zoom_steps_per_second=6):
         self.emit = emit
+        self.scroll = scroll
+        self.zoom_interval = 1 / zoom_steps_per_second
+        self.next_zoom = 0
         self.held = set()
         self.previous = set()
         self.focus = None
@@ -103,6 +130,7 @@ class Output:
         self.previous.clear()
         self.armed = False
         self.focus = None
+        self.next_zoom = 0
 
     def update(self, wanted, focus):
         if focus != self.focus:
@@ -119,9 +147,16 @@ class Output:
         for key in sorted(arrows - self.held):
             self.emit(key, True)
         self.held = arrows
-        for key in sorted(wanted - ARROWS - self.previous):
+        for key in sorted(wanted - ARROWS - WHEEL_ACTIONS - self.previous):
             self.emit(key, True)
             self.emit(key, False)
+        zoom = wanted & WHEEL_ACTIONS
+        if zoom and self.scroll is not None:
+            now = time.monotonic()
+            if now >= self.next_zoom:
+                self.scroll(sorted(zoom)[0])
+                # Never catch up missed ticks in a burst after a stall.
+                self.next_zoom = now + self.zoom_interval
         self.previous = set(wanted)
 
 
@@ -166,6 +201,8 @@ class X11:
         self.x.XSetErrorHandler(self.error_handler)
         self.xt.XTestFakeKeyEvent.argtypes = [pointer, C.c_uint, C.c_int, C.c_ulong]
         self.xt.XTestFakeKeyEvent.restype = C.c_int
+        self.xt.XTestFakeButtonEvent.argtypes = [pointer, C.c_uint, C.c_int, C.c_ulong]
+        self.xt.XTestFakeButtonEvent.restype = C.c_int
         self.xt.XTestQueryExtension.argtypes = [pointer] + [C.POINTER(C.c_int)] * 4
         self.xt.XTestQueryExtension.restype = C.c_int
         self.display = self.x.XOpenDisplay(None)
@@ -184,6 +221,12 @@ class X11:
 
     def emit(self, key, pressed):
         self.xt.XTestFakeKeyEvent(self.display, self.keycodes[key], int(pressed), 0)
+        self.x.XSync(self.display, 0)
+
+    def scroll(self, direction):
+        button = 4 if direction == "WheelUp" else 5
+        self.xt.XTestFakeButtonEvent(self.display, button, 1, 0)
+        self.xt.XTestFakeButtonEvent(self.display, button, 0, 0)
         self.x.XSync(self.display, 0)
 
     def focus(self):
@@ -236,13 +279,15 @@ def snapshot(device):
     def axis(code):
         return device.absinfo(code).value if code in axes else 0
     return (normalized_axis(device.absinfo(ABS_X)), axis(ABS_HAT0X),
-            axis(ABS_HAT0Y), set(device.active_keys()))
+            axis(ABS_HAT0Y), set(device.active_keys()),
+            normalized_axis(device.absinfo(ABS_Y)) if ABS_Y in axes else 0)
 
 
 def apply_event(state, event, axis_info):
     """Preserve short taps even when down and up arrive in one read batch."""
-    if event.type == 3 and event.code == ABS_X:
-        state[0] = normalized_axis(axis_info, event.value)
+    if event.type == 3 and event.code in (ABS_X, ABS_Y):
+        state[0 if event.code == ABS_X else 4] = normalized_axis(
+            axis_info[event.code], event.value)
     elif event.type == 3 and event.code in (ABS_HAT0X, ABS_HAT0Y):
         state[1 if event.code == ABS_HAT0X else 2] = event.value
     elif event.type == 1 and event.code in {BTN_TL, BTN_TR, *DPAD_BUTTONS}:
@@ -261,7 +306,8 @@ class Controller:
     def __init__(self, device, config):
         self.device = device
         self.mapping = Mapping(config)
-        self.axis_info = device.absinfo(ABS_X)
+        self.axis_info = {code: device.absinfo(code) for code in (ABS_X, ABS_Y)
+                          if code in device.capabilities(absinfo=False).get(3, [])}
         self.state = list(snapshot(device))
         # An old controller may already have stale held input when discovered.
         # Only subsequent mapped activity after neutral may select this device.
@@ -277,7 +323,7 @@ class Controller:
 
 
 def run(config, evdev, x11):
-    output = Output(x11.emit)
+    output = Output(x11.emit, x11.scroll, config["zoom_steps_per_second"])
     controllers = {}
     active = None
     stopped = False
@@ -300,6 +346,21 @@ def run(config, evdev, x11):
             active = None
         pad.device.close()
         logging.info("Controller removed: %s", path)
+
+    def dispatch(pad, focus, activating):
+        nonlocal active
+        wanted = pad.wanted()
+        if not wanted:
+            pad.ready = True
+        if activating and wanted and pad.ready and focus and pad is not active:
+            was_armed = output.armed and output.focus == focus
+            output.release()
+            if was_armed:
+                output.update(set(), focus)
+            active = pad
+            logging.info("Active controller: %s: %s", pad.device.path, pad.device.name)
+        if pad is active:
+            output.update(wanted, focus)
 
     try:
         while not stopped:
@@ -337,6 +398,7 @@ def run(config, evdev, x11):
                 device = pad.device
                 try:
                     dropped = False
+                    stick_pending = False
                     events = device.read() if device in readable else ()
                     for event in events:
                         if event.type == 0 and event.code == 3:  # SYN_DROPPED
@@ -349,24 +411,19 @@ def run(config, evdev, x11):
                         # use right-stick/mouse activity to select a controller.
                         if changed_focus or dropped or not apply_event(pad.state, event, pad.axis_info):
                             continue
-                        wanted = pad.wanted()
-                        if not wanted:
-                            pad.ready = True
+                        if event.type == 3 and event.code in (ABS_X, ABS_Y):
+                            stick_pending = True
+                            continue
                         activating = (event.type == 1 and event.value == 1
-                                      or event.type == 3 and event.code == ABS_X
-                                      and abs(pad.state[0]) >= config["deadzone"]
                                       or event.type == 3 and event.code in (ABS_HAT0X, ABS_HAT0Y)
                                       and event.value != 0)
-                        if activating and wanted and pad.ready and focus and pad is not active:
-                            was_armed = output.armed and output.focus == focus
-                            output.release()
-                            if was_armed:
-                                output.update(set(), focus)
-                            active = pad
-                            logging.info("Active controller: %s: %s", device.path, device.name)
-                        if pad is active:
-                            output.update(wanted, focus)
+                        dispatch(pad, focus, activating)
                     pad.refresh()
+                    if stick_pending and not changed_focus and not dropped:
+                        # Reconcile both axes together, rather than reacting to
+                        # a new X value paired with a previous packet's Y value.
+                        dispatch(pad, focus, max(abs(pad.state[0]), abs(pad.state[4]))
+                                 >= config["deadzone"])
                 except BlockingIOError:
                     continue
                 except OSError as error:

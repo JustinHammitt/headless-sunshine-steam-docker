@@ -18,14 +18,14 @@ def event(event_type, code, value):
 class FakeDevice:
     def __init__(self, path, axis=0):
         self.path, self.name = path, "Sunshine Xbox Controller"
-        self.axes = {0: axis, 16: 0, 17: 0}
+        self.axes = {0: axis, 1: 0, 16: 0, 17: 0}
         self.buttons = set()
         self.pending = []
         self.dead = False
         self.closed = 0
 
     def capabilities(self, **kwargs):
-        return {3: [0, 16, 17], 1: [310, 311, 544, 545, 546, 547]}
+        return {3: [0, 1, 16, 17], 1: [310, 311, 544, 545, 546, 547]}
 
     def absinfo(self, code):
         if self.dead:
@@ -119,7 +119,7 @@ class ControllerTests(unittest.TestCase):
         device.capabilities.return_value = {3: [0], 1: [310, 311, 544]}
         device.absinfo.return_value = SimpleNamespace(min=-100, max=100, value=0)
         device.active_keys.return_value = [544]
-        self.assertEqual(MODULE["snapshot"](device), (0, 0, 0, {544}))
+        self.assertEqual(MODULE["snapshot"](device), (0, 0, 0, {544}, 0))
         device.absinfo.assert_called_once_with(0)
 
     def test_device_filter_excludes_physical_gamepads_and_virtual_mouse(self):
@@ -137,7 +137,7 @@ class ControllerTests(unittest.TestCase):
             device.capabilities.return_value = {3: [0], 1: [310, 311]}
             self.assertFalse(eligible(device, CONFIG["device_name"]))
 
-    def simulate(self, devices, frames):
+    def simulate(self, devices, frames, return_scroll=False):
         run = MODULE["run"]
         available = {device.path: device for device in devices}
         evdev = SimpleNamespace(list_devices=lambda: list(available),
@@ -168,7 +168,8 @@ class ControllerTests(unittest.TestCase):
                 patch.object(MODULE["time"], "monotonic", side_effect=lambda: clock[0]), \
                 patch.object(MODULE["select"], "select", side_effect=poll):
             run(CONFIG, evdev, x11)
-        return [call.args for call in x11.emit.call_args_list]
+        keys = [call.args for call in x11.emit.call_args_list]
+        return (keys, [call.args for call in x11.scroll.call_args_list]) if return_scroll else keys
 
     def test_disconnect_reconnect_and_signal_release_held_keys(self):
         first = FakeDevice("/dev/input/event26")
@@ -239,7 +240,10 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(load(Path("unused"))["dpad"],
                              {"up": "F4", "right": "F2", "down": "F3", "left": "F4"})
         for text in ('{"deadzone": 0.1}', '{"unknown": 1}',
-                     '{"enabled": "yes"}', '{"dpad": {"up": "Escape"}}'):
+                     '{"enabled": "yes"}', '{"dpad": {"up": "Escape"}}',
+                     '{"zoom_steps_per_second": 0}', '{"zoom_steps_per_second": 31}',
+                     '{"diagonal_ratio": 0}', '{"diagonal_ratio": 1.1}',
+                     '{"zoom_invert": "yes"}'):
             with self.subTest(text=text), patch.object(Path, "exists", return_value=True), \
                     patch.object(Path, "read_text", return_value=text), self.assertRaises(ValueError):
                 load(Path("unused"))
@@ -294,6 +298,87 @@ class ControllerTests(unittest.TestCase):
             {"events": {pad.path: [event(1, 311, 1)]}}])
         self.assertEqual(events, [("Left", True), ("Left", False),
                                  ("Down", True), ("Down", False)])
+
+    def test_vertical_zoom_and_deliberate_diagonals(self):
+        mapper = self.mapping()
+        self.assertEqual(mapper.keys(0, 0, 0, set(), -0.8), {"WheelUp"})
+        self.assertEqual(mapper.keys(0, 0, 0, set(), 0.8), {"WheelDown"})
+        self.assertEqual(mapper.keys(0.7, 0, 0, set(), -0.7), {"Right", "WheelUp"})
+        self.assertEqual(mapper.keys(-0.7, 0, 0, set(), 0.7), {"Left", "WheelDown"})
+        self.assertEqual(mapper.keys(0, 0, 0, set(), 0), set())
+
+    def test_captured_horizontal_deflection_does_not_trigger_zoom(self):
+        mapper = self.mapping()
+        self.assertEqual(mapper.keys(32766 / 32768, 0, 0, set(), -10679 / 32768), {"Right"})
+        # Symmetric filtering also prevents accidental rotation during zoom.
+        self.assertEqual(mapper.keys(-6125 / 32768, 0, 0, set(), -32767 / 32768), {"WheelUp"})
+
+    def test_zoom_inversion_and_vertical_release_hysteresis(self):
+        mapper = self.mapping()
+        self.assertEqual(mapper.keys(0, 0, 0, set(), -0.24), set())
+        self.assertEqual(mapper.keys(0, 0, 0, set(), -0.26), {"WheelUp"})
+        self.assertEqual(mapper.keys(0, 0, 0, set(), -0.20), {"WheelUp"})
+        self.assertEqual(mapper.keys(0, 0, 0, set(), -0.17), set())
+        inverted = MODULE["Mapping"]({**CONFIG, "zoom_invert": True})
+        self.assertEqual(inverted.keys(0, 0, 0, set(), -1), {"WheelDown"})
+
+    def test_zoom_rate_limit_direction_reversal_neutral_and_focus_loss(self):
+        keys, ticks, now = [], [], [0]
+        output = MODULE["Output"](lambda *args: keys.append(args), ticks.append, 6)
+        with patch.object(MODULE["time"], "monotonic", side_effect=lambda: now[0]):
+            output.update(set(), 10)
+            output.update({"WheelUp"}, 10)
+            for instant in (0.01, 0.05, 0.1):
+                now[0] = instant
+                output.update({"WheelUp"}, 10)
+            now[0] = 0.17
+            output.update({"WheelUp"}, 10)
+            now[0] = 0.18
+            output.update(set(), 10)
+            output.update({"WheelDown"}, 10)
+            self.assertEqual(ticks, ["WheelUp", "WheelUp"])
+            now[0] = 0.34
+            output.update({"WheelDown"}, 10)
+            now[0] = 5  # A stalled loop generates one tick, never a backlog.
+            output.update({"WheelDown"}, 10)
+            output.update({"WheelDown"}, None)
+            now[0] = 6
+            output.update({"WheelDown"}, 11)
+            output.update({"WheelDown"}, 11)
+            self.assertEqual(ticks, ["WheelUp", "WheelUp", "WheelDown", "WheelDown"])
+            output.update(set(), 11)
+            output.update({"WheelUp"}, 11)
+            output.release()
+            output.update({"WheelUp"}, 11)
+        self.assertEqual(ticks[-1], "WheelUp")
+        self.assertEqual(len(ticks), 5)
+        self.assertEqual(keys, [])
+
+    def test_vertical_only_input_selects_second_controller_and_stops_on_disconnect(self):
+        old, pad = FakeDevice("/dev/input/event26"), FakeDevice("/dev/input/event28")
+        keys, ticks = self.simulate([old, pad], [{},
+            {"events": {pad.path: [event(3, 1, -100)]}},
+            {"remove": [pad.path]}, {}, {}], return_scroll=True)
+        self.assertEqual(keys, [])
+        self.assertTrue(ticks)
+        self.assertTrue(all(tick == ("WheelUp",) for tick in ticks))
+
+    def test_xy_batch_uses_complete_position_for_filtering(self):
+        pad = FakeDevice("/dev/input/event28")
+        keys, ticks = self.simulate([pad], [{},
+            {"events": {pad.path: [event(3, 1, -33), event(3, 0, 100)]}},
+            {"events": {pad.path: [event(3, 0, 0), event(3, 1, 0)]}}], return_scroll=True)
+        self.assertEqual(keys, [("Right", True), ("Right", False)])
+        self.assertEqual(ticks, [])
+
+    def test_zoom_uses_balanced_x11_wheel_button_events(self):
+        x11 = object.__new__(MODULE["X11"])
+        x11.xt, x11.x, x11.display = Mock(), Mock(), 123
+        x11.scroll("WheelUp")
+        x11.scroll("WheelDown")
+        self.assertEqual([call.args for call in x11.xt.XTestFakeButtonEvent.call_args_list],
+                         [(123, 4, 1, 0), (123, 4, 0, 0),
+                          (123, 5, 1, 0), (123, 5, 0, 0)])
 
 
 if __name__ == "__main__":

@@ -540,21 +540,28 @@ Sunshine app using the global preparation commands, including Desktop.
 ## OSRS handheld controller mapping
 
 Bolt-enabled images include a small Python `evdev` mapper. It runs as `gamer`
-in the graphical session, independently of Steam, and sends X11 keyboard events
+in the graphical session, independently of Steam, and sends X11 keyboard and wheel events
 only while a matching RuneLite/OSRS window has keyboard focus. It also works
 when launching Bolt from the Desktop menu. No mapper or `python3-evdev` package
 is added to Bolt-disabled images.
 
-| Control | Keyboard action |
+| Control | Action |
 | --- | --- |
 | Left stick left / right | Hold Left / Right arrow (camera rotation) |
+| Left stick up / down | Mouse wheel up / down (zoom in / out) |
 | Left / right bumper | Hold Up / Down arrow (camera tilt) |
 | D-pad up / right / down / left | F1 / F2 / F3 / F4, once per press |
 
-Right-stick virtual mouse, left-stick vertical zoom, face buttons, and triggers
-are not mapped or intercepted. Existing client mappings remain in effect; this
-mapper cannot remove a zoom binding in Moonlight or handheld software. Stick
-rotation uses a 25% activation deadzone and an 18% release threshold. Camera
+Right-stick input, face buttons, and triggers are not mapped or intercepted.
+Use normal controller mode with Moonlight mouse emulation off for this layout.
+Existing client mappings remain in effect; this mapper cannot remove a zoom
+binding in Moonlight or handheld software. Stick rotation and zoom use a 25%
+activation deadzone and an 18% release threshold. The minor axis is ignored
+when it is less than half the dominant axis, preventing accidental zoom while
+rotating or accidental rotation while zooming. Deliberate diagonals can do both.
+Zoom repeats at up to six wheel ticks per second without accumulating a backlog.
+Keep the mouse pointer over RuneLite's game viewport for camera zoom; wheel
+events over its side panels may scroll those panels instead. Camera
 speed is the game's keyboard camera speed, not proportional to stick travel.
 
 The mapper observes all eligible virtual Xbox/Sunshine gamepads without
@@ -585,12 +592,19 @@ use defaults. For example:
     "enabled": true,
     "deadzone": 0.25,
     "release_deadzone": 0.18,
+    "diagonal_ratio": 0.5,
+    "zoom_steps_per_second": 6,
+    "zoom_invert": false,
     "dpad": {"up": "F1", "right": "F2", "down": "F3", "left": "F4"}
 }
 ```
 
 Set `enabled` to `false` to disable it, or change D-pad assignments to match
 your in-game F-key settings. Restart the container after changing settings.
+`zoom_invert` reverses the wheel direction if your client zoom setting is inverted.
+`zoom_steps_per_second` adjusts zoom speed (1–30), and `diagonal_ratio` adjusts
+how deliberate a diagonal must be to activate both rotation and zoom (greater
+than 0, up to 1; larger values favor cardinal movement).
 `osrs-controller --print-config` shows all defaults, including the `device_name`
 and `window_class` regular expressions. Custom clients may need a different
 `window_class`; use `xprop WM_CLASS` in the streamed desktop and click the client
@@ -605,7 +619,9 @@ docker compose exec -u gamer sunshine-steam tail -n 50 /home/gamer/.local/state/
 ```
 
 Validate on the handheld: rotate in both directions, hold each bumper, press
-each D-pad direction, and check virtual mouse and existing zoom still work.
+each D-pad direction, and test stick up/down zoom with the pointer over the game.
+Verify horizontal movement does not zoom, vertical movement does not rotate,
+and deliberate diagonals can do both. Check mouse controls remain available.
 Then switch away from OSRS while holding a camera control, reconnect Moonlight,
 and switch between account windows. Camera keys should release and controls
 should work again after returning to neutral. A second manual mapper process
